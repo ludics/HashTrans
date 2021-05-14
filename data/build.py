@@ -17,6 +17,7 @@ from timm.data.transforms import _pil_interp
 
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
+from .dataset import CUB
 
 
 def build_loader(config):
@@ -81,6 +82,9 @@ def build_dataset(is_train, config):
         else:
             root = os.path.join(config.DATA.DATA_PATH, prefix)
             dataset = datasets.ImageFolder(root, transform=transform)
+        nb_classes = 1000
+    elif config.DATA.DATASET == 'CUB_200_2011':
+        dataset = CUB(config.DATA.DATA_PATH, is_train, transform=transform)
         nb_classes = 1000
     else:
         raise NotImplementedError("We only support ImageNet Now.")
