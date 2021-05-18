@@ -85,7 +85,7 @@ def build_dataset(is_train, config):
         nb_classes = 1000
     elif config.DATA.DATASET == 'CUB_200_2011':
         dataset = CUB(config.DATA.DATA_PATH, is_train, transform=transform)
-        nb_classes = 1000
+        nb_classes = 200
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 

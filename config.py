@@ -23,7 +23,8 @@ _C.DATA.BATCH_SIZE = 128
 # Path to dataset, could be overwritten by command line argument
 _C.DATA.DATA_PATH = ''
 # Dataset name
-_C.DATA.DATASET = 'imagenet'
+# _C.DATA.DATASET = 'imagenet'
+_C.DATA.DATASET = 'CUB_200_2011'
 # Input image size
 _C.DATA.IMG_SIZE = 224
 # Interpolation to resize image (random, bilinear, bicubic)
@@ -79,9 +80,9 @@ _C.TRAIN.START_EPOCH = 0
 _C.TRAIN.EPOCHS = 300
 _C.TRAIN.WARMUP_EPOCHS = 20
 _C.TRAIN.WEIGHT_DECAY = 0.05
-_C.TRAIN.BASE_LR = 5e-4
+_C.TRAIN.BASE_LR = 5e-5
 _C.TRAIN.WARMUP_LR = 5e-7
-_C.TRAIN.MIN_LR = 5e-6
+_C.TRAIN.MIN_LR = 5e-7
 # Clip gradient norm
 _C.TRAIN.CLIP_GRAD = 5.0
 # Auto resume from latest checkpoint
@@ -156,7 +157,7 @@ _C.OUTPUT = ''
 # Tag of experiment, overwritten by command line argument
 _C.TAG = 'default'
 # Frequency to save checkpoint
-_C.SAVE_FREQ = 1
+_C.SAVE_FREQ = 10
 # Frequency to logging info
 _C.PRINT_FREQ = 10
 # Fixed random seed
