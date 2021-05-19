@@ -79,7 +79,7 @@ _C.TRAIN = CN()
 _C.TRAIN.START_EPOCH = 0
 _C.TRAIN.EPOCHS = 300
 _C.TRAIN.WARMUP_EPOCHS = 20
-_C.TRAIN.WEIGHT_DECAY = 0.05
+_C.TRAIN.WEIGHT_DECAY = 5e-4
 _C.TRAIN.BASE_LR = 5e-5
 _C.TRAIN.WARMUP_LR = 5e-7
 _C.TRAIN.MIN_LR = 5e-7
@@ -127,9 +127,11 @@ _C.AUG.REMODE = 'pixel'
 # Random erase count
 _C.AUG.RECOUNT = 1
 # Mixup alpha, mixup enabled if > 0
-_C.AUG.MIXUP = 0.8
+# _C.AUG.MIXUP = 0.8
+_C.AUG.MIXUP = 0
 # Cutmix alpha, cutmix enabled if > 0
-_C.AUG.CUTMIX = 1.0
+# _C.AUG.CUTMIX = 1.0
+_C.AUG.CUTMIX = 0
 # Cutmix min/max ratio, overrides alpha and enables cutmix if set
 _C.AUG.CUTMIX_MINMAX = None
 # Probability of performing mixup or cutmix when either/both is enabled
@@ -146,6 +148,7 @@ _C.TEST = CN()
 # Whether to use center crop when testing
 _C.TEST.CROP = True
 
+_C.HASH = CN()
 # -----------------------------------------------------------------------------
 # Misc
 # -----------------------------------------------------------------------------
@@ -218,8 +221,10 @@ def update_config(config, args):
     if args.throughput:
         config.THROUGHPUT_MODE = True
     if args.hash_bit:
-        config.HASH_BIT = args.hash_bit
-
+        config.HASH.HASH_BIT = args.hash_bit
+        config.HASH.GAMMA = args.gamma
+        config.HASH.LAMBD = args.lambd
+        config.HASH.PRETRAINED = args.pretrained
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
 

@@ -18,6 +18,7 @@ from timm.data.transforms import _pil_interp
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
 from .dataset import CUB
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler
 
 
 def build_loader(config):
@@ -39,8 +40,10 @@ def build_loader(config):
         )
 
     indices = np.arange(dist.get_rank(), len(dataset_val), dist.get_world_size())
-    sampler_val = SubsetRandomSampler(indices)
-
+    # sampler_val = SubsetRandomSampler(indices)
+    sampler_val = SequentialSampler(dataset_val)
+    sampler_gallery = SequentialSampler(dataset_train)
+    
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=config.DATA.BATCH_SIZE,
@@ -49,6 +52,13 @@ def build_loader(config):
         drop_last=True,
     )
 
+    data_loader_gallery = torch.utils.data.DataLoader(
+        dataset_train, sampler=sampler_gallery,
+        batch_size=config.DATA.BATCH_SIZE,
+        num_workers=config.DATA.NUM_WORKERS,
+        pin_memory=config.DATA.PIN_MEMORY,
+        drop_last=True,
+    )
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val, sampler=sampler_val,
         batch_size=config.DATA.BATCH_SIZE,
@@ -67,7 +77,7 @@ def build_loader(config):
             prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
             label_smoothing=config.MODEL.LABEL_SMOOTHING, num_classes=config.MODEL.NUM_CLASSES)
 
-    return dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn
+    return dataset_train, dataset_val, data_loader_train, data_loader_val, data_loader_gallery, mixup_fn
 
 
 def build_dataset(is_train, config):

@@ -10,10 +10,12 @@ class DSHNet(nn.Module):
         super(DSHNet, self).__init__()
 
         self.swin = build_model(config)
-        ckpt = torch.load(config.MODEL.RESUME, map_location='cpu')
+        ckpt = torch.load(config.HASH.PRETRAINED, map_location='cpu')
+        del ckpt['model']['head.weight']
+        del ckpt['model']['head.bias']
         msg = self.swin.load_state_dict(ckpt['model'], strict=False)
         del ckpt
-        self.hash_layer = nn.Linear(self.swin.num_features, config.HASH_BIT)
+        self.hash_layer = nn.Linear(self.swin.num_features, config.HASH.HASH_BIT)
         
     def forward(self, x):
         feats = self.swin.forward_features(x)
