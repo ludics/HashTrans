@@ -224,6 +224,7 @@ def update_config(config, args):
         config.HASH.HASH_BIT = args.hash_bit
         config.HASH.GAMMA = args.gamma
         config.HASH.LAMBD = args.lambd
+        config.HASH.LAMBD_CLS = args.lambd_cls
         config.HASH.PRETRAINED = args.pretrained
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank

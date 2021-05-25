@@ -33,7 +33,7 @@ def code_generator(model, data_loader, logger=None):
         imgs = batch[0].cuda()
         labels.append(batch[1])
         with torch.no_grad():
-            out = model(imgs)
+            out, _ = model(imgs)
             out = out.data.cpu()
             codes.append(out)
 

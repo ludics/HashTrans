@@ -72,10 +72,12 @@ def parse_option():
     parser.add_argument('--hash_bit', type=int, default=64, help="Num of hashbit")
     parser.add_argument('--gamma', type=float, default=20.0, help="Cauchy loss gamma")
     parser.add_argument('--lambd', type=float, default=0.1, help="Cauchy loss lambd")
+    parser.add_argument('--lambd_cls', type=float, default=1.0, help="CLS loss lambd")
     parser.add_argument('--pretrained', help='resume from checkpoint')
 
     # distributed training
     parser.add_argument("--local_rank", type=int, required=True, help='local rank for DistributedDataParallel')
+    parser.add_argument("--valid_rank", type=int, default=0, help='rank for validation gpu')
 
     args, unparsed = parser.parse_known_args()
 
@@ -107,15 +109,15 @@ def main(args, config):
 
     lr_scheduler = build_scheduler(config, optimizer, len(data_loader_train))
 
-    #if config.AUG.MIXUP > 0.:
+    if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
-    #    criterion = SoftTargetCrossEntropy()
-    #elif config.MODEL.LABEL_SMOOTHING > 0.:
-    #    criterion = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
-    #else:
-    #    criterion = torch.nn.CrossEntropyLoss()
+        criterion_cls = SoftTargetCrossEntropy()
+    elif config.MODEL.LABEL_SMOOTHING > 0.:
+        criterion_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
+    else:
+        criterion_cls = torch.nn.CrossEntropyLoss()
     
-    criterion = DCHLoss(config)
+    criterion_hash = DCHLoss(config)
 
     max_accuracy = 0.0
 
@@ -133,7 +135,7 @@ def main(args, config):
 
     if config.MODEL.RESUME:
         # max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
-        if dist.get_rank() == 0:
+        if dist.get_rank() == args.valid_rank:
             mAP = validate(config, model, data_loader_val, data_loader_gallery)
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
         if config.EVAL_MODE:
@@ -148,8 +150,8 @@ def main(args, config):
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
         data_loader_train.sampler.set_epoch(epoch)
 
-        train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
-        if dist.get_rank() == 0:
+        train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
+        if dist.get_rank() == args.valid_rank:
             mAP = validate(config, model, data_loader_val, data_loader_gallery)
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
             if mAP > max_accuracy:
@@ -164,7 +166,7 @@ def main(args, config):
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
+def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
     model.train()
     optimizer.zero_grad()
 
@@ -173,6 +175,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
     loss_meter = AverageMeter()
     closs_meter = AverageMeter()
     qloss_meter = AverageMeter()
+    hash_loss_meter = AverageMeter()
+    cls_loss_meter = AverageMeter()
     norm_meter = AverageMeter()
 
     start = time.time()
@@ -186,13 +190,17 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         #print("targets.shape: ", targets.shape)
         #print("targets: ", targets)
         labels = torch.eye(200)[targets].cuda(non_blocking=True)
-        outputs = model(samples)
+        outputs, preds = model(samples)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
-            loss, c_loss, q_loss = criterion(outputs, labels)
+            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
+            cls_loss = criterion_cls(preds, targets)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
             c_loss = c_loss / config.TRAIN.ACCUMULATION_STEPS
             q_loss = q_loss / config.TRAIN.ACCUMULATION_STEPS
+            cls_loss = cls_loss / config.TRAIN.ACCUMULATION_STEPS
+            hash_loss = hash_loss / config.TRAIN.ACCUMULATION_STEPS
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -211,7 +219,9 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 optimizer.zero_grad()
                 lr_scheduler.step_update(epoch * num_steps + idx)
         else:
-            loss, c_loss, q_loss = criterion(outputs, labels)
+            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
+            cls_loss = criterion_cls(preds, targets)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             optimizer.zero_grad()
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -234,6 +244,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         loss_meter.update(loss.item(), targets.size(0))
         closs_meter.update(c_loss.item(), targets.size(0))
         qloss_meter.update(q_loss.item(), targets.size(0))
+        hash_loss_meter.update(hash_loss.item(), targets.size(0))
+        cls_loss_meter.update(cls_loss.item(), targets.size(0))
         norm_meter.update(grad_norm)
         batch_time.update(time.time() - end)
         end = time.time()
@@ -249,6 +261,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 f'loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
                 f'closs {closs_meter.val:.4f} ({closs_meter.avg:.4f})\t'
                 f'qloss {qloss_meter.val:.4f} ({qloss_meter.avg:.4f})\t'
+                f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\t'
+                f'cls_loss {cls_loss_meter.val:.4f} ({cls_loss_meter.avg:.4f})\t'
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
                 f'mem {memory_used:.0f}MB')
     epoch_time = time.time() - start
@@ -348,7 +362,7 @@ if __name__ == '__main__':
     config.freeze()
 
     os.makedirs(config.OUTPUT, exist_ok=True)
-    logger = create_logger(output_dir=config.OUTPUT, dist_rank=dist.get_rank(), name=f"{config.MODEL.NAME}")
+    logger = create_logger(output_dir=config.OUTPUT, dist_rank=dist.get_rank(), show_rank=args.valid_rank, name=f"{config.MODEL.NAME}")
 
     if dist.get_rank() == 0:
         path = os.path.join(config.OUTPUT, "config.json")

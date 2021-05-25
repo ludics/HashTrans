@@ -62,8 +62,11 @@ def parse_option():
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
-    parser.add_argument('--hash_bit', type=int, default=64, help="Num of hashbit")
 
+    parser.add_argument('--hash_bit', type=int, default=64, help="Num of hashbit")
+    parser.add_argument('--gamma', type=float, default=20.0, help="Cauchy loss gamma")
+    parser.add_argument('--lambd', type=float, default=0.1, help="Cauchy loss lambd")
+    parser.add_argument('--pretrained', help='resume from checkpoint')
     # distributed training
     parser.add_argument("--local_rank", type=int, required=True, help='local rank for DistributedDataParallel')
 
@@ -75,7 +78,7 @@ def parse_option():
 
 
 def main(config):
-    dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn = build_loader(config)
+    dataset_train, dataset_val, data_loader_train, data_loader_val, _, mixup_fn = build_loader(config)
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
     model = build_model(config)
@@ -167,7 +170,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
 
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
-
+        print("targets.shape: ", targets.shape)
+        print("targets: ", targets)
         outputs = model(samples)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
