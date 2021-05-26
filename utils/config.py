@@ -149,6 +149,12 @@ _C.TEST = CN()
 _C.TEST.CROP = True
 
 _C.HASH = CN()
+_C.HASH.HASH_BIT = 64
+_C.HASH.GAMMA = 20.0
+_C.HASH.LAMBD = 0.1
+_C.HASH.LAMBD_CLS = 0.0
+_C.HASH.PRETRAINED = './downloads/swin_tiny_patch4_window7_224.pth'
+
 # -----------------------------------------------------------------------------
 # Misc
 # -----------------------------------------------------------------------------
@@ -220,12 +226,6 @@ def update_config(config, args):
         config.EVAL_MODE = True
     if args.throughput:
         config.THROUGHPUT_MODE = True
-    if args.hash_bit:
-        config.HASH.HASH_BIT = args.hash_bit
-        config.HASH.GAMMA = args.gamma
-        config.HASH.LAMBD = args.lambd
-        config.HASH.LAMBD_CLS = args.lambd_cls
-        config.HASH.PRETRAINED = args.pretrained
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
 
