@@ -94,6 +94,8 @@ _C.TRAIN.ACCUMULATION_STEPS = 0
 # could be overwritten by command line argument
 _C.TRAIN.USE_CHECKPOINT = False
 
+_C.TRAIN.SAMPLE_ITER = 10
+
 # LR scheduler
 _C.TRAIN.LR_SCHEDULER = CN()
 _C.TRAIN.LR_SCHEDULER.NAME = 'cosine'
@@ -154,6 +156,7 @@ _C.HASH.GAMMA = 20.0
 _C.HASH.LAMBD = 0.1
 _C.HASH.LAMBD_CLS = 0.0
 _C.HASH.PRETRAINED = './downloads/swin_tiny_patch4_window7_224.pth'
+_C.HASH.NUM_SAMPLES = 2000
 
 # -----------------------------------------------------------------------------
 # Misc

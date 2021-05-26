@@ -20,7 +20,7 @@ from timm.utils import accuracy, AverageMeter
 
 from utils.config import get_config
 from models import build_model
-from models.hash_model import DSHNet
+from models.adsh_model import DSHNet
 from models.hash_loss import DCHLoss
 from data import build_loader
 from utils.lr_scheduler import build_scheduler
@@ -31,6 +31,9 @@ from utils.feat_extractor import feat_extractor, code_generator
 from utils.tools import CalcTopMap
 from utils.ret_metric import RetMetric
 
+from models.adsh_loss import ADSH_Loss
+from data.build import sample_dataloader
+import utils.evaluate as evaluate
 
 try:
     # noinspection PyUnresolvedReferences
@@ -85,9 +88,60 @@ def parse_option():
 
     return args, config
 
+def solve_dcc(B, U, expand_U, S, code_length, gamma):
+    """
+    Solve DCC problem.
+    """
+    Q = (code_length * S).t() @ U + gamma * expand_U
+
+    for bit in range(code_length):
+        q = Q[:, bit]
+        u = U[:, bit]
+        B_prime = torch.cat((B[:, :bit], B[:, bit+1:]), dim=1)
+        U_prime = torch.cat((U[:, :bit], U[:, bit+1:]), dim=1)
+
+        B[:, bit] = (q.t() - B_prime @ U_prime.t() @ u.t()).sign()
+
+    return B
+
+
+def calc_loss(U, B, S, code_length, omega, gamma):
+    """
+    Calculate loss.
+    """
+    hash_loss = ((code_length * S - U @ B.t()) ** 2).sum()
+    quantization_loss = ((U - B[omega, :]) ** 2).sum()
+    loss = (hash_loss + gamma * quantization_loss) / (U.shape[0] * B.shape[0])
+
+    return loss.item()
+
+
+def generate_code(model, dataloader, code_length):
+    """
+    Generate hash code
+
+    Args
+        dataloader(torch.utils.data.DataLoader): Data loader.
+        code_length(int): Hash code length.
+        device(torch.device): Using gpu or cpu.
+
+    Returns
+        code(torch.Tensor): Hash code.
+    """
+    model.eval()
+    with torch.no_grad():
+        N = len(dataloader.dataset)
+        code = torch.zeros([N, code_length]).cuda()
+        for data, _, index in dataloader:
+            data = data.cuda()
+            hash_code = model(data)
+            code[index, :] = hash_code.sign()
+
+    model.train()
+    return code
 
 def main(args, config):
-    dataset_train, dataset_val, data_loader_train, data_loader_val, data_loader_gallery, mixup_fn = build_loader(config)
+    dataset_train, dataset_val, train_dataloader, query_dataloader, retrieval_dataloader, mixup_fn = build_loader(config)
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
     model = DSHNet(config)
@@ -107,7 +161,7 @@ def main(args, config):
         flops = model_without_ddp.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
-    lr_scheduler = build_scheduler(config, optimizer, len(data_loader_train))
+    lr_scheduler = build_scheduler(config, optimizer, len(retrieval_dataloader))
 
     if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
@@ -117,7 +171,13 @@ def main(args, config):
     else:
         criterion_cls = torch.nn.CrossEntropyLoss()
     
-    criterion_hash = DCHLoss(config)
+    criterion_hash = ADSH_Loss(config.HASH.HASH_BIT, config.HASH.GAMMA)
+    
+    num_retrieval = len(retrieval_dataloader.dataset)
+    U = torch.zeros(config.HASH.NUM_SAMPLES, config.HASH.HASH_BIT).cuda()
+    B = torch.randn(num_retrieval, config.HASH.HASH_BIT).cuda()
+    retrieval_targets = retrieval_dataloader.dataset.get_onehot_targets().cuda()
+    query_targets = query_dataloader.dataset.get_onehot_targets().cuda()
 
     max_accuracy = 0.0
 
@@ -136,27 +196,61 @@ def main(args, config):
     if config.MODEL.RESUME:
         # max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
         if dist.get_rank() == args.valid_rank:
-            mAP = validate(config, model, data_loader_val, data_loader_gallery)
+            query_code = generate_code(model, query_dataloader, config.HASH.HASH_BIT)
+            mAP = evaluate.mean_average_precision(query_code, B, query_targets, retrieval_targets, -1)
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
         if config.EVAL_MODE:
             return
 
     if config.THROUGHPUT_MODE:
-        throughput(data_loader_val, model, logger)
+        throughput(query_dataloader, model, logger)
         return
 
+    train_dataloader, sample_index = sample_dataloader(retrieval_dataloader, config)
+
+    train_targets = train_dataloader.dataset.get_onehot_targets().cuda()
+    S = (train_targets @ retrieval_targets.t() > 0).float()
+    S = torch.where(S == 1, torch.full_like(S, 1), torch.full_like(S, -1))
+    r = S.sum() / (1 - S).sum()
+    S = S * (1 + r) - r
+    
     logger.info("Start training")
     start_time = time.time()
+    
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
-        data_loader_train.sampler.set_epoch(epoch)
+        if epoch % config.TRAIN.SAMPLE_ITER == 0:
+            train_dataloader, sample_index = sample_dataloader(retrieval_dataloader, config)
 
-        train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
+            train_targets = train_dataloader.dataset.get_onehot_targets().cuda()
+            S = (train_targets @ retrieval_targets.t() > 0).float()
+            S = torch.where(S == 1, torch.full_like(S, 1), torch.full_like(S, -1))
+
+            r = S.sum() / (1 - S).sum()
+            S = S * (1 + r) - r
+
+        train_dataloader.sampler.set_epoch(epoch)
+
+        train_one_epoch(config, model, criterion_hash, criterion_cls, train_dataloader, optimizer, epoch, mixup_fn, lr_scheduler, U, B, S, sample_index)
+        
+        # update B
+        if (epoch + 1) % config.TRAIN.SAMPLE_ITER == 0:
+            expand_U = torch.zeros(B.shape).cuda()
+            expand_U[sample_index, :] = U
+            B = solve_dcc(B, U, expand_U, S, config.HASH.HASH_BIT, config.HASH.GAMMA)
+            iter_loss = calc_loss(U, B, S, config.HASH.HASH_BIT, sample_index, config.HASH.GAMMA)
+            logger.info(f"iter {epoch // config.TRAIN.SAMPLE_ITER}: iter_loss: {iter_loss:.4f}")
         if dist.get_rank() == args.valid_rank:
-            mAP = validate(config, model, data_loader_val, data_loader_gallery)
+            query_code = generate_code(model, query_dataloader, config.HASH.HASH_BIT)
+            mAP = evaluate.mean_average_precision(query_code, B, query_targets, retrieval_targets, -1)
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
             if mAP > max_accuracy:
                 save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
+                torch.save(query_code.cpu(), os.path.join(config.OUTPUT, 'query_code.t'))
+                torch.save(B.cpu(), os.path.join(config.OUTPUT, 'database_code.t'))
+                torch.save(query_targets.cpu(), os.path.join(config.OUTPUT, 'query_targets.t'))
+                torch.save(retrieval_targets.cpu(), os.path.join(config.OUTPUT, 'retrieval_targets.t'))
             max_accuracy = max(max_accuracy, mAP)
+            logger.info(f' mAP {mAP:.6f} best_mAP {max_accuracy:.6f}')
             if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
                 save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
             logger.info(f'Max accuracy: {max_accuracy:.6f}')
@@ -166,39 +260,38 @@ def main(args, config):
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
+def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, U, B, S, sample_index):
     model.train()
     optimizer.zero_grad()
 
     num_steps = len(data_loader)
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
-    closs_meter = AverageMeter()
-    qloss_meter = AverageMeter()
     hash_loss_meter = AverageMeter()
     cls_loss_meter = AverageMeter()
     norm_meter = AverageMeter()
 
     start = time.time()
     end = time.time()
-    for idx, (samples, targets) in enumerate(data_loader):
+    for idx, (samples, targets, index) in enumerate(data_loader):
         samples = samples.cuda(non_blocking=True)
         targets = targets.cuda(non_blocking=True)
+        index = index.cuda(non_blocking=True)
 
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
         #print("targets.shape: ", targets.shape)
         #print("targets: ", targets)
-        labels = torch.eye(200)[targets].cuda(non_blocking=True)
-        outputs, preds = model(samples)
+        #labels = torch.eye(200)[targets].cuda(non_blocking=True)
+        outputs = model(samples)
+        U[index, :] = outputs.data.type(torch.float32)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
-            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
-            cls_loss = criterion_cls(preds, targets)
+            hash_loss = criterion_hash(outputs, B, S[index, :], sample_index[index])
+            # cls_loss = criterion_cls(preds, targets)
+            cls_loss = torch.tensor(0.0)
             loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
-            c_loss = c_loss / config.TRAIN.ACCUMULATION_STEPS
-            q_loss = q_loss / config.TRAIN.ACCUMULATION_STEPS
             cls_loss = cls_loss / config.TRAIN.ACCUMULATION_STEPS
             hash_loss = hash_loss / config.TRAIN.ACCUMULATION_STEPS
             if config.AMP_OPT_LEVEL != "O0":
@@ -219,8 +312,9 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
                 optimizer.zero_grad()
                 lr_scheduler.step_update(epoch * num_steps + idx)
         else:
-            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
-            cls_loss = criterion_cls(preds, targets)
+            hash_loss = criterion_hash(outputs, B, S[index, :], sample_index[index])
+            # cls_loss = criterion_cls(preds, targets)
+            cls_loss = torch.tensor(0.0)
             loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             optimizer.zero_grad()
             if config.AMP_OPT_LEVEL != "O0":
@@ -242,8 +336,6 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
         torch.cuda.synchronize()
 
         loss_meter.update(loss.item(), targets.size(0))
-        closs_meter.update(c_loss.item(), targets.size(0))
-        qloss_meter.update(q_loss.item(), targets.size(0))
         hash_loss_meter.update(hash_loss.item(), targets.size(0))
         cls_loss_meter.update(cls_loss.item(), targets.size(0))
         norm_meter.update(grad_norm)
@@ -259,8 +351,6 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
                 f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\t'
                 f'time {batch_time.val:.4f} ({batch_time.avg:.4f})\t'
                 f'loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
-                f'closs {closs_meter.val:.4f} ({closs_meter.avg:.4f})\t'
-                f'qloss {qloss_meter.val:.4f} ({qloss_meter.avg:.4f})\t'
                 f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\t'
                 f'cls_loss {cls_loss_meter.val:.4f} ({cls_loss_meter.avg:.4f})\t'
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
@@ -374,3 +464,6 @@ if __name__ == '__main__':
     logger.info(config.dump())
 
     main(args, config)
+
+
+
