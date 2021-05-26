@@ -1,0 +1,19 @@
+MODEL:
+  TYPE: swin
+  NAME: swin_base_patch4_window7_224
+  DROP_PATH_RATE: 0.5
+  SWIN:
+    EMBED_DIM: 128
+    DEPTHS: [ 2, 2, 18, 2 ]
+    NUM_HEADS: [ 4, 8, 16, 32 ]
+    WINDOW_SIZE: 7
+TRAIN:
+  BASE_LR: 5e-4
+  SAMPLE_ITER: 5
+HASH:
+  LAMBD_CLS: 0.0
+  HASH_BIT: 64
+  GAMMA: 200.0
+  NUM_SAMPLES: 2000
+DATA:
+  DATASET: CUB_200_2011_ADSH
