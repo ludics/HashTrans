@@ -15,5 +15,6 @@ HASH:
   HASH_BIT: 64
   GAMMA: 200.0
   NUM_SAMPLES: 2000
+  PRETRAINED: ./downloads/swin_base_patch4_window7_224_22k.pth
 DATA:
   DATASET: CUB_200_2011_ADSH

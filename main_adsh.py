@@ -161,7 +161,6 @@ def main(args, config):
         flops = model_without_ddp.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
-    lr_scheduler = build_scheduler(config, optimizer, config.HASH.NUM_SAMPLES)
 
     if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
@@ -207,6 +206,7 @@ def main(args, config):
         return
 
     train_dataloader, sample_index = sample_dataloader(retrieval_dataloader, config)
+    lr_scheduler = build_scheduler(config, optimizer, len(train_dataloader))
 
     train_targets = train_dataloader.dataset.get_onehot_targets().cuda()
     S = (train_targets @ retrieval_targets.t() > 0).float()
