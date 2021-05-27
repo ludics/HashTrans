@@ -18,7 +18,7 @@ def build_optimizer(config, model):
         skip = model.no_weight_decay()
     if hasattr(model, 'no_weight_decay_keywords'):
         skip_keywords = model.no_weight_decay_keywords()
-    parameters = set_weight_decay(model, skip, skip_keywords)
+    parameters = set_weight_decay(model, config, skip, skip_keywords)
 
     opt_lower = config.TRAIN.OPTIMIZER.NAME.lower()
     optimizer = None
@@ -32,21 +32,24 @@ def build_optimizer(config, model):
     return optimizer
 
 
-def set_weight_decay(model, skip_list=(), skip_keywords=()):
+def set_weight_decay(model, config, skip_list=(), skip_keywords=()):
     has_decay = []
     no_decay = []
-
+    hash_layer = []
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue  # frozen weights
-        if len(param.shape) == 1 or name.endswith(".bias") or (name in skip_list) or \
+        if name.startswith("hash_layer."):
+            hash_layer.append(param)
+        elif len(param.shape) == 1 or name.endswith(".bias") or (name in skip_list) or \
                 check_keywords_in_name(name, skip_keywords):
             no_decay.append(param)
             # print(f"{name} has no weight decay")
         else:
             has_decay.append(param)
     return [{'params': has_decay},
-            {'params': no_decay, 'weight_decay': 0.}]
+            {'params': no_decay, 'weight_decay': 0.},
+            {'params': hash_layer, 'lr': 10 * config.TRAIN.BASE_LR}]
 
 
 def check_keywords_in_name(name, keywords=()):
