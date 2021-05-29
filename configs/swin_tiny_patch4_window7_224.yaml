@@ -10,4 +10,8 @@ MODEL:
 TRAIN:
   BASE_LR: 5e-4
 HASH:
-  LAMBD_CLS: 0.0
+  GAMMA: 20.0
+  HASH_BIT: 32
+  LAMBD: 0.1
+  LAMBD_CLS: 0.1
+  PRETRAINED: downloads/swin_tiny_patch4_window7_224.pth
