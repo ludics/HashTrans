@@ -229,6 +229,8 @@ def update_config(config, args):
         config.EVAL_MODE = True
     if args.throughput:
         config.THROUGHPUT_MODE = True
+    if args.hash_bit != -1:
+        config.HASH.HASH_BIT = args.hash_bit
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
 
