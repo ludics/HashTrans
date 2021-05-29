@@ -455,7 +455,7 @@ class PatchEmbed(nn.Module):
         return flops
 
 
-class SwinTransformer(nn.Module):
+class SwinTransformerPart(nn.Module):
     r""" Swin Transformer
         A PyTorch impl of : `Swin Transformer: Hierarchical Vision Transformer using Shifted Windows`  -
           https://arxiv.org/pdf/2103.14030
@@ -488,7 +488,7 @@ class SwinTransformer(nn.Module):
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
                  use_checkpoint=False, **kwargs):
         super().__init__()
-
+        print("Swin part model!!!")
         self.num_classes = num_classes
         self.num_layers = len(depths)
         self.embed_dim = embed_dim

@@ -27,7 +27,7 @@ class DSHNet(nn.Module):
         self.cls_head = nn.Linear(config.HASH.HASH_BIT, config.MODEL.NUM_CLASSES)
     
     def feat_extract(self, x):
-        if self.model_type == 'swin':
+        if self.model_type.startswith('swin'):
             return self.swin.forward_features(x)
         elif self.model_type == 'resnet':
             x = self.resnet.forward_features(x)
