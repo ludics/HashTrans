@@ -30,7 +30,7 @@ from utils.utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_re
 from utils.feat_extractor import feat_extractor, code_generator
 from utils.tools import CalcTopMap
 from utils.ret_metric import RetMetric
-
+from models.exchnet_loss import SP_Loss, CH_Loss
 
 try:
     # noinspection PyUnresolvedReferences
@@ -111,14 +111,17 @@ def main(args, config):
 
     if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
-        criterion_cls = SoftTargetCrossEntropy()
+        crt_cls = SoftTargetCrossEntropy()
     elif config.MODEL.LABEL_SMOOTHING > 0.:
-        criterion_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
+        crt_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
     else:
-        criterion_cls = torch.nn.CrossEntropyLoss()
+        crt_cls = torch.nn.CrossEntropyLoss()
     
-    criterion_hash = DCHLoss(config)
+    crt_hash = DCHLoss(config)
 
+    crt_sp = SP_Loss()
+    crt_ch = CH_Loss()
+    
     max_accuracy = 0.0
 
     if config.TRAIN.AUTO_RESUME:
@@ -150,7 +153,7 @@ def main(args, config):
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
         data_loader_train.sampler.set_epoch(epoch)
 
-        train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
+        train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
         if dist.get_rank() == args.valid_rank:
             mAP = validate(config, model, data_loader_val, data_loader_gallery)
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
@@ -166,7 +169,7 @@ def main(args, config):
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
+def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
     model.train()
     optimizer.zero_grad()
 
@@ -177,6 +180,8 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
     qloss_meter = AverageMeter()
     hash_loss_meter = AverageMeter()
     cls_loss_meter = AverageMeter()
+    sp_loss_meter = AverageMeter()
+    ch_loss_meter = AverageMeter()
     norm_meter = AverageMeter()
 
     start = time.time()
@@ -190,17 +195,22 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
         #print("targets.shape: ", targets.shape)
         #print("targets: ", targets)
         labels = torch.eye(200)[targets].cuda(non_blocking=True)
-        outputs, preds = model(samples)
+        outputs, preds, sp_v, ch_v = model(samples)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
-            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
-            cls_loss = criterion_cls(preds, targets)
-            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
+            hash_loss, c_loss, q_loss = crt_hash(outputs, labels)
+            cls_loss = crt_cls(preds, targets)
+            sp_loss = crt_sp(sp_v)
+            ch_loss = crt_sp(ch_v)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss + \
+                 config.HASH.LAMBD_SP * sp_loss + config.HASH.LAMBD_CH * ch_loss
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
             c_loss = c_loss / config.TRAIN.ACCUMULATION_STEPS
             q_loss = q_loss / config.TRAIN.ACCUMULATION_STEPS
             cls_loss = cls_loss / config.TRAIN.ACCUMULATION_STEPS
             hash_loss = hash_loss / config.TRAIN.ACCUMULATION_STEPS
+            sp_loss = sp_loss / config.TRAIN.ACCUMULATION_STEPS
+            ch_loss = ch_loss / config.TRAIN.ACCUMULATION_STEPS
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -219,9 +229,12 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
                 optimizer.zero_grad()
                 lr_scheduler.step_update(epoch * num_steps + idx)
         else:
-            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
-            cls_loss = criterion_cls(preds, targets)
-            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
+            hash_loss, c_loss, q_loss = crt_hash(outputs, labels)
+            cls_loss = crt_cls(preds, targets)
+            sp_loss = crt_sp(sp_v)
+            ch_loss = crt_sp(ch_v)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss + \
+                 config.HASH.LAMBD_SP * sp_loss + config.HASH.LAMBD_CH * ch_loss
             optimizer.zero_grad()
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -246,6 +259,8 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
         qloss_meter.update(q_loss.item(), targets.size(0))
         hash_loss_meter.update(hash_loss.item(), targets.size(0))
         cls_loss_meter.update(cls_loss.item(), targets.size(0))
+        sp_loss_meter.update(sp_loss.item(), targets.size(0))
+        ch_loss_meter.update(ch_loss.item(), targets.size(0))
         norm_meter.update(grad_norm)
         batch_time.update(time.time() - end)
         end = time.time()
@@ -256,13 +271,15 @@ def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, o
             etas = batch_time.avg * (num_steps - idx)
             logger.info(
                 f'Train: [{epoch}/{config.TRAIN.EPOCHS}][{idx}/{num_steps}]\t'
-                f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\t'
+                f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\n'
                 f'time {batch_time.val:.4f} ({batch_time.avg:.4f})\t'
                 f'loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
                 f'closs {closs_meter.val:.4f} ({closs_meter.avg:.4f})\t'
                 f'qloss {qloss_meter.val:.4f} ({qloss_meter.avg:.4f})\t'
-                f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\t'
+                f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\n'
                 f'cls_loss {cls_loss_meter.val:.4f} ({cls_loss_meter.avg:.4f})\t'
+                f'sp_loss {sp_loss_meter.val:.4f} ({sp_loss_meter.avg:.4f})\t'
+                f'ch_loss {ch_loss_meter.val:.4f} ({ch_loss_meter.avg:.4f})\t'
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
                 f'mem {memory_used:.0f}MB')
     epoch_time = time.time() - start
@@ -274,7 +291,7 @@ best_iter = -1
 def validate(config, model, test_loader, database_loader):
     global best_mapr
     global best_iter
-    criterion = torch.nn.CrossEntropyLoss()
+    crt = torch.nn.CrossEntropyLoss()
     model.eval()
     
     batch_time = AverageMeter()

@@ -58,6 +58,7 @@ _C.MODEL.DROP_PATH_RATE = 0.1
 # Label Smoothing
 _C.MODEL.LABEL_SMOOTHING = 0.1
 
+_C.MODEL.ATT_SIZE = 4
 # Swin Transformer parameters
 _C.MODEL.SWIN = CN()
 _C.MODEL.SWIN.PATCH_SIZE = 4
@@ -154,9 +155,12 @@ _C.HASH = CN()
 _C.HASH.HASH_BIT = 64
 _C.HASH.GAMMA = 20.0
 _C.HASH.LAMBD = 0.1
-_C.HASH.LAMBD_CLS = 0.0
+_C.HASH.LAMBD_CLS = 0.1
 _C.HASH.PRETRAINED = './downloads/swin_tiny_patch4_window7_224.pth'
 _C.HASH.NUM_SAMPLES = 2000
+_C.HASH.LAMBD_SP = 1.0
+_C.HASH.LAMBD_CH = 1.0
+
 
 # -----------------------------------------------------------------------------
 # Misc
@@ -235,7 +239,7 @@ def update_config(config, args):
     config.LOCAL_RANK = args.local_rank
 
     # output folder
-    config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.NAME, config.TAG)
+    config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.TYPE, config.MODEL.NAME, config.TAG)
 
     config.freeze()
 

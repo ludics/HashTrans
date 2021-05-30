@@ -13,7 +13,7 @@ class DSHNet(nn.Module):
         if config.MODEL.TYPE == 'resnet':
             self.resnet = timm.create_model(config.MODEL.NAME, pretrained=True)
             self.num_features = self.resnet.num_features
-        else:
+        elif config.MODEL.TYPE == 'swin':
             self.swin = build_model(config)
             ckpt = torch.load(config.HASH.PRETRAINED, map_location='cpu')
             del ckpt['model']['head.weight']
@@ -21,14 +21,20 @@ class DSHNet(nn.Module):
             msg = self.swin.load_state_dict(ckpt['model'], strict=False)
             del ckpt
             self.num_features = self.swin.num_features
+        elif config.MODEL.TYPE == 'swin_gwl':
+            self.swin = build_model(config)
+            self.num_features = self.swin.num_features
         self.model_type = config.MODEL.TYPE
         self.hash_layer = nn.Linear(self.num_features, config.HASH.HASH_BIT)
         # self.cls_head = nn.Linear(self.num_features, config.MODEL.NUM_CLASSES)
         self.cls_head = nn.Linear(config.HASH.HASH_BIT, config.MODEL.NUM_CLASSES)
     
     def feat_extract(self, x):
-        if self.model_type.startswith('swin'):
+        if self.model_type == 'swin':
             return self.swin.forward_features(x)
+        elif self.model_type == 'swin_gwl':
+            x, sp_v, ch_v = self.swin.forward_features(x)
+            return x, sp_v, ch_v
         elif self.model_type == 'resnet':
             x = self.resnet.forward_features(x)
             x = self.resnet.global_pool(x)
@@ -37,8 +43,17 @@ class DSHNet(nn.Module):
             return x
 
     def forward(self, x):
-        feats = self.feat_extract(x)
-        hash_bits = self.hash_layer(feats)
-        preds = self.cls_head(hash_bits)
-        return hash_bits, preds
+        if self.model_type == 'swin_gwl':
+            feats, sp_v, ch_v = self.feat_extract(x)
+            hash_bits = self.hash_layer(feats)
+            preds = self.cls_head(hash_bits)
+            if self.training:
+                return hash_bits, preds, sp_v, ch_v
+            else:
+                return hash_bits, preds
+        else:
+            feats = self.feat_extract(x)
+            hash_bits = self.hash_layer(feats)
+            preds = self.cls_head(hash_bits)
+            return hash_bits, preds
 

@@ -7,6 +7,7 @@
 
 from .swin_transformer import SwinTransformer
 from .swin_transformer_part import SwinTransformerPart
+from .swin_transformer_part import SwinTrans_GwL
 
 
 def build_model(config):
@@ -28,8 +29,10 @@ def build_model(config):
                                 ape=config.MODEL.SWIN.APE,
                                 patch_norm=config.MODEL.SWIN.PATCH_NORM,
                                 use_checkpoint=config.TRAIN.USE_CHECKPOINT)
-    elif model_type == 'swin-part':
-        model = SwinTransformerPart(img_size=config.DATA.IMG_SIZE,
+    elif model_type == 'swin_gwl':
+        model =   SwinTrans_GwL(pretrained_path=config.HASH.PRETRAINED,
+                                att_size=config.MODEL.ATT_SIZE,
+                                img_size=config.DATA.IMG_SIZE,
                                 patch_size=config.MODEL.SWIN.PATCH_SIZE,
                                 in_chans=config.MODEL.SWIN.IN_CHANS,
                                 num_classes=config.MODEL.NUM_CLASSES,
