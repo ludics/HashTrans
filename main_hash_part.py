@@ -70,6 +70,7 @@ def parse_option():
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
     
     parser.add_argument('--hash_bit', type=int, default=-1, help="Num of hashbit")
+    parser.add_argument('--att_size', type=int, default=4, help="Num of att size")
     parser.add_argument('--gamma', type=float, default=20.0, help="Cauchy loss gamma")
     parser.add_argument('--lambd', type=float, default=0.1, help="Cauchy loss lambd")
     parser.add_argument('--lambd_cls', type=float, default=1.0, help="CLS loss lambd")
