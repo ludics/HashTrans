@@ -17,7 +17,7 @@ from timm.data.transforms import _pil_interp
 
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
-from .dataset import CUB, Cub2011
+from .dataset import CUB, Cub2011, Dogs
 from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler, Dataset
 from PIL import Image
 
@@ -103,6 +103,9 @@ def build_dataset(is_train, config):
         else:
             dataset = Cub2011(config.DATA.DATA_PATH, 'query', transform=transform)
         nb_classes = 200
+    elif config.DATA.DATASET == 'Dogs':
+        dataset = Dogs(config.DATA.DATA_PATH, train=is_train, transform=transform, download=True)
+        nb_classes = 120
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 

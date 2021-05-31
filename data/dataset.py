@@ -311,7 +311,7 @@ def find_classes(classes_file):
 
     return (image_ids, targets, classes, class_to_idx)
 
-class dogs(Dataset):
+class Dogs(Dataset):
     """`Stanford Dogs <http://vision.stanford.edu/aditya86/ImageNetDogs/>`_ Dataset.
     Args:
         root (string): Root directory of dataset where directory

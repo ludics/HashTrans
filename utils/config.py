@@ -235,7 +235,9 @@ def update_config(config, args):
         config.THROUGHPUT_MODE = True
     if args.hash_bit != -1:
         config.HASH.HASH_BIT = args.hash_bit
-        config.HASH.ATT_SIZE = args.att_size
+    if args.dataset:
+        config.DATA.DATASET = args.dataset
+    config.MODEL.ATT_SIZE = args.att_size
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
 

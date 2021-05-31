@@ -52,6 +52,7 @@ def parse_option():
     # easy config modification
     parser.add_argument('--batch-size', type=int, help="batch size for single GPU")
     parser.add_argument('--data-path', type=str, help='path to dataset')
+    parser.add_argument('--dataset', type=str, default=None, help='dataset name')
     parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
     parser.add_argument('--cache-mode', type=str, default='part', choices=['no', 'full', 'part'],
                         help='no: no cache, '
@@ -70,6 +71,7 @@ def parse_option():
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
     
     parser.add_argument('--hash_bit', type=int, default=-1, help="Num of hashbit")
+    parser.add_argument('--att_size', type=int, default=-1, help="Num of hashbit")
     parser.add_argument('--gamma', type=float, default=20.0, help="Cauchy loss gamma")
     parser.add_argument('--lambd', type=float, default=0.1, help="Cauchy loss lambd")
     parser.add_argument('--lambd_cls', type=float, default=1.0, help="CLS loss lambd")

@@ -14,3 +14,5 @@ HASH:
   GAMMA: 20.0
   LAMBD: 0.1
   LAMBD_CLS: 0.1
+DATA:
+  DATASET: Dogs
