@@ -104,7 +104,7 @@ def build_dataset(is_train, config):
             dataset = Cub2011(config.DATA.DATA_PATH, 'query', transform=transform)
         nb_classes = 200
     elif config.DATA.DATASET == 'Dogs':
-        dataset = Dogs(config.DATA.DATA_PATH, train=is_train, transform=transform, download=True)
+        dataset = Dogs(config.DATA.DATA_PATH, train=is_train, transform=transform)
         nb_classes = 120
     else:
         raise NotImplementedError("We only support ImageNet Now.")
