@@ -24,6 +24,9 @@ class DSHNet(nn.Module):
         elif config.MODEL.TYPE == 'swin_gwl':
             self.swin = build_model(config)
             self.num_features = self.swin.num_features
+        elif config.MODEL.TYPE == 'swin_gwl_m2':
+            self.swin = build_model(config)
+            self.num_features = self.swin.num_features
         self.model_type = config.MODEL.TYPE
         self.hash_layer = nn.Linear(self.num_features, config.HASH.HASH_BIT)
         # self.cls_head = nn.Linear(self.num_features, config.MODEL.NUM_CLASSES)
@@ -32,7 +35,7 @@ class DSHNet(nn.Module):
     def feat_extract(self, x):
         if self.model_type == 'swin':
             return self.swin.forward_features(x)
-        elif self.model_type == 'swin_gwl':
+        elif self.model_type.startswith('swin_gwl'):
             x, sp_v, ch_v = self.swin.forward_features(x)
             return x, sp_v, ch_v
         elif self.model_type == 'resnet':
@@ -43,7 +46,7 @@ class DSHNet(nn.Module):
             return x
 
     def forward(self, x):
-        if self.model_type == 'swin_gwl':
+        if self.model_type.startswith('swin_gwl'):
             feats, sp_v, ch_v = self.feat_extract(x)
             hash_bits = self.hash_layer(feats)
             preds = self.cls_head(hash_bits)
