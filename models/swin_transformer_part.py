@@ -633,17 +633,20 @@ class SwinTransformerRefine(nn.Module):
         self.mlp_ratio = mlp_ratio
 
         # split image into non-overlapping patches
-        self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
-        num_patches = self.patch_embed.num_patches
-        patches_resolution = self.patch_embed.patches_resolution
+        # self.patch_embed = PatchEmbed(
+        #     img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+        #     norm_layer=norm_layer if self.patch_norm else None)
+        # num_patches = self.patch_embed.num_patches
+        # patches_resolution = self.patch_embed.patches_resolution
+        # self.patches_resolution = patches_resolution
+        img_size = to_2tuple(img_size)
+        patch_size = to_2tuple(patch_size)
+        patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
         self.patches_resolution = patches_resolution
-
         # absolute position embedding
-        if self.ape:
-            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
-            trunc_normal_(self.absolute_pos_embed, std=.02)
+        # if self.ape:
+        #     self.absolute_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+        #     trunc_normal_(self.absolute_pos_embed, std=.02)
 
         self.pos_drop = nn.Dropout(p=drop_rate)
 
@@ -764,17 +767,22 @@ class SwinTransformerAtt(nn.Module):
         self.att_size = att_size
 
         # split image into non-overlapping patches
-        self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
-        num_patches = self.patch_embed.num_patches
-        patches_resolution = self.patch_embed.patches_resolution
+        # self.patch_embed = PatchEmbed(
+        #     img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+        #     norm_layer=norm_layer if self.patch_norm else None)
+        # num_patches = self.patch_embed.num_patches
+        # patches_resolution = self.patch_embed.patches_resolution
+        # self.patches_resolution = patches_resolution
+
+        img_size = to_2tuple(img_size)
+        patch_size = to_2tuple(patch_size)
+        patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
         self.patches_resolution = patches_resolution
 
-        # absolute position embedding
-        if self.ape:
-            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
-            trunc_normal_(self.absolute_pos_embed, std=.02)
+        # # absolute position embedding
+        # if self.ape:
+        #     self.absolute_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+        #     trunc_normal_(self.absolute_pos_embed, std=.02)
 
         self.pos_drop = nn.Dropout(p=drop_rate)
 
