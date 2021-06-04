@@ -5,10 +5,11 @@ from os.path import join
 import numpy as np
 import scipy
 from scipy import io
-import scipy.misc
+# import scipy.misc
 from PIL import Image
 import pandas as pd
 import matplotlib.pyplot as plt
+import imageio
 
 import torch
 from torch.utils.data import Dataset
@@ -54,12 +55,12 @@ class CUB():
         train_file_list = [x for i, x in zip(train_test_list, img_name_list) if i]
         test_file_list = [x for i, x in zip(train_test_list, img_name_list) if not i]
         if self.is_train:
-            self.train_img = [scipy.misc.imread(os.path.join(self.root, 'images', train_file)) for train_file in
+            self.train_img = [imageio.imread(os.path.join(self.root, 'images', train_file)) for train_file in
                               train_file_list[:data_len]]
             self.label = [x for i, x in zip(train_test_list, label_list) if i][:data_len]
             self.train_imgname = [x for x in train_file_list[:data_len]]
         if not self.is_train:
-            self.test_img = [scipy.misc.imread(os.path.join(self.root, 'images', test_file)) for test_file in
+            self.test_img = [imageio.imread(os.path.join(self.root, 'images', test_file)) for test_file in
                              test_file_list[:data_len]]
             self.label = [x for i, x in zip(train_test_list, label_list) if not i][:data_len]
             self.test_imgname = [x for x in test_file_list[:data_len]]
