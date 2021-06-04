@@ -34,12 +34,12 @@ def code_generator(model, data_loader, logger=None):
         labels.append(batch[1])
         with torch.no_grad():
             out, _ = model(imgs)
-            out = out.data.cpu()
+            # out = out.data.cpu()
             codes.append(out)
 
         if logger is not None and (i + 1) % 100 == 0:
             logger.debug(f"Extract Features: [{i + 1}/{len(data_loader)}]")
         del out
-    codes = torch.cat(codes).sign().numpy()
+    codes = torch.cat(codes).sign()
     labels = torch.cat(labels)
     return codes, labels

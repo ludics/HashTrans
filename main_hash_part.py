@@ -31,6 +31,7 @@ from utils.feat_extractor import feat_extractor, code_generator
 from utils.tools import CalcTopMap
 from utils.ret_metric import RetMetric
 from models.exchnet_loss import SP_Loss, CH_Loss
+from utils.evaluate import mean_average_precision
 
 try:
     # noinspection PyUnresolvedReferences
@@ -196,7 +197,7 @@ def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loade
             samples, targets = mixup_fn(samples, targets)
         #print("targets.shape: ", targets.shape)
         #print("targets: ", targets)
-        labels = torch.eye(200)[targets].cuda(non_blocking=True)
+        labels = torch.eye(config.MODEL.NUM_CLASSES)[targets].cuda(non_blocking=True)
         outputs, preds, sp_v, ch_v = model(samples)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
@@ -303,14 +304,15 @@ def validate(config, model, test_loader, database_loader):
 
     end = time.time()
     test_codes, test_labels = code_generator(model, test_loader, logger)
-    test_labels_onehot = torch.eye(200)[test_labels]
-    gallery_coes, gallery_labels = code_generator(model, database_loader, logger)
-    gallery_labels_onehot = torch.eye(200)[gallery_labels]
-    mAP = CalcTopMap(gallery_coes, test_codes, gallery_labels_onehot.numpy(),
-                     test_labels_onehot.numpy(), 10000)
-    pr_range = [10, 20, 40, 80]
-    codes = [gallery_coes, test_codes]
-    labels = [gallery_labels.numpy(), test_labels.numpy()]
+    test_labels_onehot = torch.eye(config.MODEL.NUM_CLESSES)[test_labels].cuda(non_blocking=True)
+    gallery_codes, gallery_labels = code_generator(model, database_loader, logger)
+    gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLESSES)[gallery_labels].cuda(non_blocking=True)
+    # mAP = CalcTopMap(gallery_codes, test_codes, gallery_labels_onehot.numpy(),
+    #                  test_labels_onehot.numpy(), 10000)
+    mAP = mean_average_precision(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
+    # pr_range = [10, 20, 40, 80]
+    # codes = [gallery_codes, test_codes]
+    # labels = [gallery_labels.numpy(), test_labels.numpy()]
     if mAP > best_mapr:
         best_mapr = mAP
     logger.info(f' mAP {mAP:.6f} best_mAP {best_mapr:.6f}')
