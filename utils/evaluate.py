@@ -1,4 +1,5 @@
 import torch
+from tqdm import tqdm
 
 
 def mean_average_precision(query_code,
@@ -24,7 +25,7 @@ def mean_average_precision(query_code,
     num_query = query_labels.shape[0]
     mean_AP = 0.0
 
-    for i in range(num_query):
+    for i in tqdm(range(num_query)):
         # Retrieve images from database
         retrieval = (query_labels[i, :] @ database_labels.t() > 0).float()
 
