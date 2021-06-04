@@ -27,6 +27,13 @@ class DSHNet(nn.Module):
         elif config.MODEL.TYPE == 'swin_gwl_m2':
             self.swin = build_model(config)
             self.num_features = self.swin.num_features
+        elif config.MODEL.TYPE == 'swin_pyramid':
+            self.swin = build_model(config)
+            ckpt = torch.load(config.HASH.PRETRAINED, map_location='cpu')
+            msg = self.swin.load_state_dict(ckpt['model'], strict=False)
+            self.swin.init_pyramids(ckpt)
+            del ckpt
+            self.num_features = self.swin.num_features
         self.model_type = config.MODEL.TYPE
         self.hash_layer = nn.Linear(self.num_features, config.HASH.HASH_BIT)
         # self.cls_head = nn.Linear(self.num_features, config.MODEL.NUM_CLASSES)
@@ -34,6 +41,8 @@ class DSHNet(nn.Module):
     
     def feat_extract(self, x):
         if self.model_type == 'swin':
+            return self.swin.forward_features(x)
+        elif self.model_type == 'swin_pyramid':
             return self.swin.forward_features(x)
         elif self.model_type.startswith('swin_gwl'):
             x, sp_v, ch_v = self.swin.forward_features(x)

@@ -160,7 +160,8 @@ def main(args, config):
             if mAP > max_accuracy:
                 save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
             max_accuracy = max(max_accuracy, mAP)
-            if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+            # if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+            if (epoch == (config.TRAIN.EPOCHS - 1)):
                 save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
             logger.info(f'Max accuracy: {max_accuracy:.6f}')
 
