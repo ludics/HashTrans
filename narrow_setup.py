@@ -13,13 +13,13 @@ def gpu_info(gpu_id=0):
     return gpu_power, gpu_memory
  
  
-def narrow_setup(gpu_id, cmd, interval=2):
+def narrow_setup(gpu_id, gpu_id2, cmd, interval=2):
     _, gpu_memory1 = gpu_info(gpu_id)
-    _, gpu_memory2 = gpu_info(gpu_id + 1)
+    _, gpu_memory2 = gpu_info(gpu_id2)
     i = 0
     while gpu_memory1 > 1000 or gpu_memory2 > 1000:  # set waiting condition
         _, gpu_memory1 = gpu_info(gpu_id)
-        _, gpu_memory2 = gpu_info(gpu_id + 1)
+        _, gpu_memory2 = gpu_info(gpu_id2)
         i = i % 10
         symbol = 'monitoring: ' + '>' * i + ' ' * (10 - i - 1) + '|'
         gpu_memory_str1 = 'gpu memory1:%d MiB |' % gpu_memory1
@@ -34,5 +34,6 @@ def narrow_setup(gpu_id, cmd, interval=2):
  
 if __name__ == '__main__':
     gpu_id = int(sys.argv[1])
-    cmd = 'sh ' + sys.argv[2]
-    narrow_setup(gpu_id, cmd)
+    gpu_id2 = int(sys.argv[2])
+    cmd = 'sh ' + sys.argv[3]
+    narrow_setup(gpu_id, gpu_id2, cmd)

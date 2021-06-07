@@ -73,6 +73,7 @@ _C.MODEL.SWIN.QK_SCALE = None
 _C.MODEL.SWIN.APE = False
 _C.MODEL.SWIN.PATCH_NORM = True
 
+_C.MODEL.METHOD = None
 # -----------------------------------------------------------------------------
 # Training settings
 # -----------------------------------------------------------------------------

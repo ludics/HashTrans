@@ -7,6 +7,7 @@ MODEL:
     DEPTHS: [ 2, 2, 6, 2 ]
     NUM_HEADS: [ 3, 6, 12, 24 ]
     WINDOW_SIZE: 7
+  METHOD: concat
 TRAIN:
   BASE_LR: 5e-4
   EPOCHS: 300
