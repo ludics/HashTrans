@@ -34,7 +34,7 @@ class DSHNet(nn.Module):
             self.swin.init_pyramids(ckpt)
             del ckpt
             self.num_features = self.swin.num_features
-        elif config.MODEL.TYPE == 'swin_pyramid_m2':
+        elif config.MODEL.TYPE.startswith('swin_pyramid_m'):
             self.swin = build_model(config)
             ckpt = torch.load(config.HASH.PRETRAINED, map_location='cpu')
             msg = self.swin.load_state_dict(ckpt['model'], strict=False)
