@@ -730,7 +730,10 @@ class SwinTransformer_Pyramid_M2(nn.Module):
         self.latlayer3 = nn.Linear(num_features_3, 2 * embed_dim, bias=False)
         self.latlayer2 = nn.Linear(num_features_2, 2 * embed_dim, bias=False)
         self.latlayer1 = nn.Linear(num_features_1, 2 * embed_dim, bias=False)
-        self.norm_pyramid = norm_layer(2 * embed_dim)
+        self.norm_pyramid1 = norm_layer(2 * embed_dim)
+        self.norm_pyramid2 = norm_layer(2 * embed_dim)
+        self.norm_pyramid3 = norm_layer(2 * embed_dim)
+        self.norm_pyramid4 = norm_layer(2 * embed_dim)
 
         self.apply(self._init_weights)
 
@@ -793,13 +796,13 @@ class SwinTransformer_Pyramid_M2(nn.Module):
         p2 = self._upsample_add(p3, self.latlayer2(d2), i_layer=1)
         p1 = self._upsample_add(p2, self.latlayer1(d1), i_layer=0)
 
-        p4 = self.norm_pyramid(p4)
+        p4 = self.norm_pyramid4(p4)
         p4 = torch.flatten(self.maxpool(p4.transpose(1, 2)), 1)
-        p3 = self.norm_pyramid(p3)
+        p3 = self.norm_pyramid3(p3)
         p3 = torch.flatten(self.maxpool(p3.transpose(1, 2)), 1)
-        p2 = self.norm_pyramid(p2)
+        p2 = self.norm_pyramid2(p2)
         p2 = torch.flatten(self.maxpool(p2.transpose(1, 2)), 1)
-        p1 = self.norm_pyramid(p1)
+        p1 = self.norm_pyramid1(p1)
         p1 = torch.flatten(self.maxpool(p1.transpose(1, 2)), 1)
 
         p = torch.cat([p4, p3, p2, p1], dim=1)
@@ -920,7 +923,10 @@ class SwinTransformer_Pyramid_M4(nn.Module):
         self.latlayer3 = nn.Linear(self.num_features_3, self.pyramid_features, bias=False)
         self.latlayer2 = nn.Linear(self.num_features_2, self.pyramid_features, bias=False)
         self.latlayer1 = nn.Linear(self.num_features_1, self.pyramid_features, bias=False)
-        self.norm_pyramid = norm_layer(self.pyramid_features)
+        self.norm_pyramid1 = norm_layer(self.pyramid_features)
+        self.norm_pyramid2 = norm_layer(self.pyramid_features)
+        self.norm_pyramid3 = norm_layer(self.pyramid_features)
+        self.norm_pyramid4 = norm_layer(self.pyramid_features)
 
         self.smooth4 = nn.Linear(self.pyramid_features, 1, bias=False)
         self.smooth3 = nn.Linear(self.pyramid_features, 1, bias=False)
@@ -989,19 +995,19 @@ class SwinTransformer_Pyramid_M4(nn.Module):
         p2 = self._upsample_add(p3, self.latlayer2(d2), i_layer=1)
         p1 = self._upsample_add(p2, self.latlayer1(d1), i_layer=0)
 
-        p4 = self.norm_pyramid(p4)
+        p4 = self.norm_pyramid4(p4)
         m4 = F.softmax(self.smooth4(p4).repeat(1, 1, self.pyramid_features))
         p4 = m4 * p4
         p4 = torch.sum(p4, dim=1)
-        p3 = self.norm_pyramid(p3)
+        p3 = self.norm_pyramid3(p3)
         m3 = F.softmax(self.smooth3(p3).repeat(1, 1, self.pyramid_features))
         p3 = m3 * p3
         p3 = torch.sum(p3, dim=1)
-        p2 = self.norm_pyramid(p2)
+        p2 = self.norm_pyramid2(p2)
         m2 = F.softmax(self.smooth2(p2).repeat(1, 1, self.pyramid_features))
         p2 = m2 * p2
         p2 = torch.sum(p2, dim=1)
-        p1 = self.norm_pyramid(p1)
+        p1 = self.norm_pyramid1(p1)
         m1 = F.softmax(self.smooth1(p1).repeat(1, 1, self.pyramid_features))
         p1 = m1 * p1
         p1 = torch.sum(p1, dim=1)
@@ -1075,10 +1081,10 @@ class SwinTransformer_Pyramid_M3(nn.Module):
             self.num_features = int(embed_dim * 2 ** (self.num_layers - 1)) * 2
         self.mlp_ratio = mlp_ratio
         
-        self.num_features_1 = embed_dim
-        self.num_features_2 = 2 * embed_dim
-        self.num_features_3 = 4 * embed_dim
-        self.num_features_4 = 8 * embed_dim
+        self.layer_features_1 = embed_dim
+        self.layer_features_2 = 2 * embed_dim
+        self.layer_features_3 = 4 * embed_dim
+        self.layer_features_4 = 8 * embed_dim
         self.pyramid_features = 2 * embed_dim
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
@@ -1118,15 +1124,21 @@ class SwinTransformer_Pyramid_M3(nn.Module):
 
             self.layers.append(layer)
 
-        self.norm = norm_layer(self.num_features_4)
+        self.norm = norm_layer(self.layer_features_4)
         self.avgpool = nn.AdaptiveAvgPool1d(1)
         # self.head = nn.Linear(self.self.num_features, num_classes) if num_classes > 0 else nn.Identity()
-        self.toplayer = nn.Linear(self.num_features_4, self.pyramid_features, bias=False)
-        self.latlayer3 = nn.Linear(self.num_features_3, self.pyramid_features, bias=False)
-        self.latlayer2 = nn.Linear(self.num_features_2, self.pyramid_features, bias=False)
-        self.latlayer1 = nn.Linear(self.num_features_1, self.pyramid_features, bias=False)
-        self.norm_pyramid = norm_layer(self.pyramid_features)
+        self.toplayer = nn.Linear(self.layer_features_4, self.layer_features_3, bias=False)
+        self.latlayer3 = nn.Linear(self.layer_features_3, self.layer_features_2, bias=False)
+        self.latlayer2 = nn.Linear(self.layer_features_2, self.layer_features_1, bias=False)
+        self.latlayer1 = nn.Linear(self.layer_features_1, self.layer_features_1, bias=False)
+        self.norm_pyramid1 = norm_layer(self.layer_features_1)
+        self.norm_pyramid2 = norm_layer(self.layer_features_1)
+        self.norm_pyramid3 = norm_layer(self.layer_features_2)
+        self.norm_pyramid4 = norm_layer(self.layer_features_3)
 
+        self.uplayer2 = nn.Linear(self.layer_features_1, self.layer_features_2, bias=False)
+        self.uplayer3 = nn.Linear(self.layer_features_2, self.layer_features_3, bias=False)
+        self.uplayer4 = nn.Linear(self.layer_features_3, self.layer_features_4, bias=False)
         
 
         self.apply(self._init_weights)
@@ -1138,7 +1150,7 @@ class SwinTransformer_Pyramid_M3(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.upsample(x, size=(H, W), mode='bilinear')
+        x = F.interpolate(x, size=(H, W), mode='bilinear')
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
@@ -1186,38 +1198,47 @@ class SwinTransformer_Pyramid_M3(nn.Module):
 
         # Top-down
         p4 = self.toplayer(d4)
-        p3 = self._upsample_add(p4, self.latlayer3(d3), i_layer=2)
-        p2 = self._upsample_add(p3, self.latlayer2(d2), i_layer=1)
-        p1 = self._upsample_add(p2, self.latlayer1(d1), i_layer=0)
+        p3 = self._upsample_add(p4, d3, i_layer=2)
+        p3 = self.latlayer3(p3)
+        p2 = self._upsample_add(p3, d2, i_layer=1)
+        p2 = self.latlayer2(p2)
+        p1 = self._upsample_add(p2, d1, i_layer=0)
+        # p1 = self.latlayer1(p1)
 
-        p4 = self.norm_pyramid(p4)
-        m4 = F.softmax(torch.sum(p4, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
+        p4 = self.norm_pyramid4(p4)
+        m4 = F.softmax(torch.sum(p4, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_3)
         p4 = m4 * p4
-        # p4 = torch.flatten(self.avgpool(p4.transpose(1, 2)), 1)
-        p4 = torch.sum(p4, dim=1)
-        p3 = self.norm_pyramid(p3)
-        m3 = F.softmax(torch.sum(p3, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
+        p4 = torch.flatten(self.avgpool(p4.transpose(1, 2)), 1)
+        # p4 = torch.sum(p4, dim=1)
+        p3 = self.norm_pyramid3(p3)
+        m3 = F.softmax(torch.sum(p3, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_2)
         p3 = m3 * p3
-        # p3 = torch.flatten(self.avgpool(p3.transpose(1, 2)), 1)
-        p3 = torch.sum(p3, dim=1)
-        p2 = self.norm_pyramid(p2)
-        m2 = F.softmax(torch.sum(p2, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
+        p3 = torch.flatten(self.avgpool(p3.transpose(1, 2)), 1)
+        # p3 = torch.sum(p3, dim=1)
+        p2 = self.norm_pyramid2(p2)
+        m2 = F.softmax(torch.sum(p2, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_1)
         p2 = m2 * p2
-        # p2 = torch.flatten(self.avgpool(p2.transpose(1, 2)), 1)
-        p2 = torch.sum(p2, dim=1)
-        p1 = self.norm_pyramid(p1)
-        m1 = F.softmax(torch.sum(p1, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
+        p2 = torch.flatten(self.avgpool(p2.transpose(1, 2)), 1)
+        # p2 = torch.sum(p2, dim=1)
+        p1 = self.norm_pyramid1(p1)
+        m1 = F.softmax(torch.sum(p1, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_1)
         p1 = m1 * p1
-        # p1 = torch.flatten(self.avgpool(p1.transpose(1, 2)), 1)
-        p1 = torch.sum(p1, dim=1)
+        p1 = torch.flatten(self.avgpool(p1.transpose(1, 2)), 1)
+        # p1 = torch.sum(p1, dim=1)
 
-        p = torch.cat([p4, p3, p2, p1], dim=1)
+        p2 = p1 + p2
+        p3 = p3 + self.uplayer2(p2)
+        p4 = p4 + self.uplayer3(p3)
 
+        # p = torch.cat([p4, p3, p2, p1], dim=1)
+        # print("p shape: ", p.shape)
         x = self.norm(c4)  # B L C
         x = self.avgpool(x.transpose(1, 2))  # B C 1
         x = torch.flatten(x, 1)
-        if self.method == 'concat':
-            p = torch.cat([x, p], dim=1)
+
+        p = x + self.uplayer4(p4)
+        # if self.method == 'concat':
+        #     p = torch.cat([x, p], dim=1)
         return p
 
     def forward(self, x):
@@ -1331,7 +1352,10 @@ class SwinTransformer_Pyramid_M5(nn.Module):
         self.latlayer3 = nn.Linear(num_features_3, 2 * embed_dim, bias=False)
         self.latlayer2 = nn.Linear(num_features_2, 2 * embed_dim, bias=False)
         self.latlayer1 = nn.Linear(num_features_1, 2 * embed_dim, bias=False)
-        self.norm_pyramid = norm_layer(2 * embed_dim)
+        self.norm_pyramid1 = norm_layer(2 * embed_dim)
+        self.norm_pyramid2 = norm_layer(2 * embed_dim)
+        self.norm_pyramid3 = norm_layer(2 * embed_dim)
+        self.norm_pyramid4 = norm_layer(2 * embed_dim)
 
         self.layer4_pool = GlobalDescriptor(1.0)
         self.layer3_pool = GlobalDescriptor(2.0)
@@ -1400,13 +1424,13 @@ class SwinTransformer_Pyramid_M5(nn.Module):
         p2 = self._upsample_add(p3, self.latlayer2(d2), i_layer=1)
         p1 = self._upsample_add(p2, self.latlayer1(d1), i_layer=0)
 
-        p4 = self.norm_pyramid(p4)
+        p4 = self.norm_pyramid4(p4)
         p4 = torch.flatten(self.layer4_pool(p4.transpose(1, 2)), 1)
-        p3 = self.norm_pyramid(p3)
+        p3 = self.norm_pyramid3(p3)
         p3 = torch.flatten(self.layer3_pool(p3.transpose(1, 2)), 1)
-        p2 = self.norm_pyramid(p2)
+        p2 = self.norm_pyramid2(p2)
         p2 = torch.flatten(self.layer2_pool(p2.transpose(1, 2)), 1)
-        p1 = self.norm_pyramid(p1)
+        p1 = self.norm_pyramid1(p1)
         p1 = torch.flatten(self.layer1_pool(p1.transpose(1, 2)), 1)
 
         p = torch.cat([p4, p3, p2, p1], dim=1)
