@@ -996,19 +996,19 @@ class SwinTransformer_Pyramid_M4(nn.Module):
         p1 = self._upsample_add(p2, self.latlayer1(d1), i_layer=0)
 
         p4 = self.norm_pyramid4(p4)
-        m4 = F.softmax(self.smooth4(p4).repeat(1, 1, self.pyramid_features))
+        m4 = F.softmax(self.smooth4(p4), dim=1).repeat(1, 1, self.pyramid_features)
         p4 = m4 * p4
         p4 = torch.sum(p4, dim=1)
         p3 = self.norm_pyramid3(p3)
-        m3 = F.softmax(self.smooth3(p3).repeat(1, 1, self.pyramid_features))
+        m3 = F.softmax(self.smooth3(p3), dim=1).repeat(1, 1, self.pyramid_features)
         p3 = m3 * p3
         p3 = torch.sum(p3, dim=1)
         p2 = self.norm_pyramid2(p2)
-        m2 = F.softmax(self.smooth2(p2).repeat(1, 1, self.pyramid_features))
+        m2 = F.softmax(self.smooth2(p2), dim=1).repeat(1, 1, self.pyramid_features)
         p2 = m2 * p2
         p2 = torch.sum(p2, dim=1)
         p1 = self.norm_pyramid1(p1)
-        m1 = F.softmax(self.smooth1(p1).repeat(1, 1, self.pyramid_features))
+        m1 = F.softmax(self.smooth1(p1), dim=1).repeat(1, 1, self.pyramid_features)
         p1 = m1 * p1
         p1 = torch.sum(p1, dim=1)
 
@@ -1081,10 +1081,10 @@ class SwinTransformer_Pyramid_M3(nn.Module):
             self.num_features = int(embed_dim * 2 ** (self.num_layers - 1)) * 2
         self.mlp_ratio = mlp_ratio
         
-        self.layer_features_1 = embed_dim
-        self.layer_features_2 = 2 * embed_dim
-        self.layer_features_3 = 4 * embed_dim
-        self.layer_features_4 = 8 * embed_dim
+        self.num_features_1 = embed_dim
+        self.num_features_2 = 2 * embed_dim
+        self.num_features_3 = 4 * embed_dim
+        self.num_features_4 = 8 * embed_dim
         self.pyramid_features = 2 * embed_dim
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
@@ -1124,21 +1124,15 @@ class SwinTransformer_Pyramid_M3(nn.Module):
 
             self.layers.append(layer)
 
-        self.norm = norm_layer(self.layer_features_4)
+        self.norm = norm_layer(self.num_features_4)
         self.avgpool = nn.AdaptiveAvgPool1d(1)
         # self.head = nn.Linear(self.self.num_features, num_classes) if num_classes > 0 else nn.Identity()
-        self.toplayer = nn.Linear(self.layer_features_4, self.layer_features_3, bias=False)
-        self.latlayer3 = nn.Linear(self.layer_features_3, self.layer_features_2, bias=False)
-        self.latlayer2 = nn.Linear(self.layer_features_2, self.layer_features_1, bias=False)
-        self.latlayer1 = nn.Linear(self.layer_features_1, self.layer_features_1, bias=False)
-        self.norm_pyramid1 = norm_layer(self.layer_features_1)
-        self.norm_pyramid2 = norm_layer(self.layer_features_1)
-        self.norm_pyramid3 = norm_layer(self.layer_features_2)
-        self.norm_pyramid4 = norm_layer(self.layer_features_3)
+        self.toplayer = nn.Linear(self.num_features_4, self.pyramid_features, bias=False)
+        self.latlayer3 = nn.Linear(self.num_features_3, self.pyramid_features, bias=False)
+        self.latlayer2 = nn.Linear(self.num_features_2, self.pyramid_features, bias=False)
+        self.latlayer1 = nn.Linear(self.num_features_1, self.pyramid_features, bias=False)
+        self.norm_pyramid = norm_layer(self.pyramid_features)
 
-        self.uplayer2 = nn.Linear(self.layer_features_1, self.layer_features_2, bias=False)
-        self.uplayer3 = nn.Linear(self.layer_features_2, self.layer_features_3, bias=False)
-        self.uplayer4 = nn.Linear(self.layer_features_3, self.layer_features_4, bias=False)
         
 
         self.apply(self._init_weights)
@@ -1150,7 +1144,7 @@ class SwinTransformer_Pyramid_M3(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.interpolate(x, size=(H, W), mode='bilinear')
+        x = F.upsample(x, size=(H, W), mode='bilinear')
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
@@ -1198,47 +1192,38 @@ class SwinTransformer_Pyramid_M3(nn.Module):
 
         # Top-down
         p4 = self.toplayer(d4)
-        p3 = self._upsample_add(p4, d3, i_layer=2)
-        p3 = self.latlayer3(p3)
-        p2 = self._upsample_add(p3, d2, i_layer=1)
-        p2 = self.latlayer2(p2)
-        p1 = self._upsample_add(p2, d1, i_layer=0)
-        # p1 = self.latlayer1(p1)
+        p3 = self._upsample_add(p4, self.latlayer3(d3), i_layer=2)
+        p2 = self._upsample_add(p3, self.latlayer2(d2), i_layer=1)
+        p1 = self._upsample_add(p2, self.latlayer1(d1), i_layer=0)
 
-        p4 = self.norm_pyramid4(p4)
-        m4 = F.softmax(torch.sum(p4, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_3)
+        p4 = self.norm_pyramid(p4)
+        m4 = F.softmax(torch.sum(p4, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
         p4 = m4 * p4
-        p4 = torch.flatten(self.avgpool(p4.transpose(1, 2)), 1)
-        # p4 = torch.sum(p4, dim=1)
-        p3 = self.norm_pyramid3(p3)
-        m3 = F.softmax(torch.sum(p3, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_2)
+        # p4 = torch.flatten(self.avgpool(p4.transpose(1, 2)), 1)
+        p4 = torch.sum(p4, dim=1)
+        p3 = self.norm_pyramid(p3)
+        m3 = F.softmax(torch.sum(p3, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
         p3 = m3 * p3
-        p3 = torch.flatten(self.avgpool(p3.transpose(1, 2)), 1)
-        # p3 = torch.sum(p3, dim=1)
-        p2 = self.norm_pyramid2(p2)
-        m2 = F.softmax(torch.sum(p2, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_1)
+        # p3 = torch.flatten(self.avgpool(p3.transpose(1, 2)), 1)
+        p3 = torch.sum(p3, dim=1)
+        p2 = self.norm_pyramid(p2)
+        m2 = F.softmax(torch.sum(p2, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
         p2 = m2 * p2
-        p2 = torch.flatten(self.avgpool(p2.transpose(1, 2)), 1)
-        # p2 = torch.sum(p2, dim=1)
-        p1 = self.norm_pyramid1(p1)
-        m1 = F.softmax(torch.sum(p1, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_1)
+        # p2 = torch.flatten(self.avgpool(p2.transpose(1, 2)), 1)
+        p2 = torch.sum(p2, dim=1)
+        p1 = self.norm_pyramid(p1)
+        m1 = F.softmax(torch.sum(p1, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.pyramid_features)
         p1 = m1 * p1
-        p1 = torch.flatten(self.avgpool(p1.transpose(1, 2)), 1)
-        # p1 = torch.sum(p1, dim=1)
+        # p1 = torch.flatten(self.avgpool(p1.transpose(1, 2)), 1)
+        p1 = torch.sum(p1, dim=1)
 
-        p2 = p1 + p2
-        p3 = p3 + self.uplayer2(p2)
-        p4 = p4 + self.uplayer3(p3)
+        p = torch.cat([p4, p3, p2, p1], dim=1)
 
-        # p = torch.cat([p4, p3, p2, p1], dim=1)
-        # print("p shape: ", p.shape)
         x = self.norm(c4)  # B L C
         x = self.avgpool(x.transpose(1, 2))  # B C 1
         x = torch.flatten(x, 1)
-
-        p = x + self.uplayer4(p4)
-        # if self.method == 'concat':
-        #     p = torch.cat([x, p], dim=1)
+        if self.method == 'concat':
+            p = torch.cat([x, p], dim=1)
         return p
 
     def forward(self, x):
@@ -1440,6 +1425,449 @@ class SwinTransformer_Pyramid_M5(nn.Module):
         x = torch.flatten(x, 1)
         if self.method == 'concat':
             p = torch.cat([x, p], dim=1)
+        return p
+
+    def forward(self, x):
+        x = self.forward_features(x)
+        # x = self.head(x)
+        return x
+
+    def flops(self):
+        flops = 0
+        flops += self.patch_embed.flops()
+        for i, layer in enumerate(self.layers):
+            flops += layer.flops()
+        flops += self.num_features * self.patches_resolution[0] * self.patches_resolution[1] // (2 ** self.num_layers)
+        flops += self.num_features * self.num_classes
+        return flops
+
+
+
+class SwinTransformer_Pyramid_M6(nn.Module):
+    r""" Swin Transformer
+        A PyTorch impl of : `Swin Transformer: Hierarchical Vision Transformer using Shifted Windows`  -
+          https://arxiv.org/pdf/2103.14030
+
+    Args:
+        img_size (int | tuple(int)): Input image size. Default 224
+        patch_size (int | tuple(int)): Patch size. Default: 4
+        in_chans (int): Number of input image channels. Default: 3
+        num_classes (int): Number of classes for classification head. Default: 1000
+        embed_dim (int): Patch embedding dimension. Default: 96
+        depths (tuple(int)): Depth of each Swin Transformer layer.
+        num_heads (tuple(int)): Number of attention heads in different layers.
+        window_size (int): Window size. Default: 7
+        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim. Default: 4
+        qkv_bias (bool): If True, add a learnable bias to query, key, value. Default: True
+        qk_scale (float): Override default qk scale of head_dim ** -0.5 if set. Default: None
+        drop_rate (float): Dropout rate. Default: 0
+        attn_drop_rate (float): Attention dropout rate. Default: 0
+        drop_path_rate (float): Stochastic depth rate. Default: 0.1
+        norm_layer (nn.Module): Normalization layer. Default: nn.LayerNorm.
+        ape (bool): If True, add absolute position embedding to the patch embedding. Default: False
+        patch_norm (bool): If True, add normalization after patch embedding. Default: True
+        use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False
+    """
+
+    def __init__(self, method=None, pretrained_path=None, img_size=224, patch_size=4, in_chans=3, num_classes=1000,
+                 embed_dim=96, depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24],
+                 window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
+                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
+                 norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
+                 use_checkpoint=False, **kwargs):
+        super().__init__()
+        print("M6")
+        self.num_classes = num_classes
+        self.num_layers = len(depths)
+        self.embed_dim = embed_dim
+        self.ape = ape
+        self.patch_norm = patch_norm
+        self.method = method
+        self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
+        if self.method == 'concat':
+            self.num_features = int(embed_dim * 2 ** (self.num_layers - 1)) * 2
+        self.mlp_ratio = mlp_ratio
+        
+        self.layer_features_1 = embed_dim
+        self.layer_features_2 = 2 * embed_dim
+        self.layer_features_3 = 4 * embed_dim
+        self.layer_features_4 = 8 * embed_dim
+        self.pyramid_features = 2 * embed_dim
+        # split image into non-overlapping patches
+        self.patch_embed = PatchEmbed(
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+            norm_layer=norm_layer if self.patch_norm else None)
+        num_patches = self.patch_embed.num_patches
+        patches_resolution = self.patch_embed.patches_resolution
+        self.patches_resolution = patches_resolution
+
+        # absolute position embedding
+        if self.ape:
+            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+            trunc_normal_(self.absolute_pos_embed, std=.02)
+
+        self.pos_drop = nn.Dropout(p=drop_rate)
+
+        # stochastic depth
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
+
+        # build layers
+        self.layers = nn.ModuleList()
+        # self.pyramids = nn.ModuleList()
+        for i_layer in range(self.num_layers):
+            layer = BasicLayer_P(dim=int(embed_dim * 2 ** i_layer),
+                               input_resolution=(patches_resolution[0] // (2 ** i_layer),
+                                                 patches_resolution[1] // (2 ** i_layer)),
+                               depth=depths[i_layer],
+                               num_heads=num_heads[i_layer],
+                               window_size=window_size,
+                               mlp_ratio=self.mlp_ratio,
+                               qkv_bias=qkv_bias, qk_scale=qk_scale,
+                               drop=drop_rate, attn_drop=attn_drop_rate,
+                               drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],
+                               norm_layer=norm_layer,
+                               downsample=PatchMerging if (i_layer < self.num_layers - 1) else None,
+                               use_checkpoint=use_checkpoint)
+
+            self.layers.append(layer)
+
+        self.norm = norm_layer(self.layer_features_4)
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
+        # self.head = nn.Linear(self.self.num_features, num_classes) if num_classes > 0 else nn.Identity()
+        # self.toplayer = nn.Linear(self.layer_features_4, self.layer_features_3, bias=False)
+        # self.latlayer3 = nn.Linear(self.layer_features_3, self.layer_features_2, bias=False)
+        # self.latlayer2 = nn.Linear(self.layer_features_2, self.layer_features_1, bias=False)
+        # self.latlayer1 = nn.Linear(self.layer_features_1, self.layer_features_1, bias=False)
+        self.norm_pyramid1 = norm_layer(self.layer_features_1)
+        self.norm_pyramid2 = norm_layer(self.layer_features_2)
+        self.norm_pyramid3 = norm_layer(self.layer_features_3)
+        self.norm_pyramid4 = norm_layer(self.layer_features_4)
+
+        self.uplayer1 = nn.Linear(self.layer_features_1, self.layer_features_2, bias=False)
+        self.uplayer2 = nn.Linear(self.layer_features_2, self.layer_features_3, bias=False)
+        self.uplayer3 = nn.Linear(self.layer_features_3, self.layer_features_4, bias=False)
+        # self.uplayer4 = nn.Linear(self.layer_features_3, self.layer_features_4, bias=False)
+        
+
+        self.apply(self._init_weights)
+
+    def _upsample_add(self, x, y, i_layer=0):
+        B, Ly, C = y.shape
+        H, W = self.patches_resolution[0] // (2 ** i_layer), self.patches_resolution[1] // (2 ** i_layer)
+        assert Ly == H * W
+        B, Lx, C = x.shape
+        assert Lx == H * W // 4
+        x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
+        x = F.interpolate(x, size=(H, W), mode='bilinear')
+        x = x.transpose(1, 2).transpose(2, 3)
+        x = x.view(B, Ly, C)
+        return x + y
+
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    # def init_pyramids(self, ckpt):
+    #     ckpt_pyramids = collections.OrderedDict()
+    #     for k, v in ckpt['model'].items():
+    #         if 'downsample' in k:
+    #             k_1 = k.replace('layers.', '').replace('downsample.', '')
+    #             ckpt_pyramids[k_1] = v
+    #             #del ckpt['model'][k]
+    #     self.pyramids.load_state_dict(ckpt_pyramids, strict=False)
+
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return {'absolute_pos_embed'}
+
+    @torch.jit.ignore
+    def no_weight_decay_keywords(self):
+        return {'relative_position_bias_table'}
+
+    def forward_features(self, x):
+        x = self.patch_embed(x)
+        if self.ape:
+            x = x + self.absolute_pos_embed
+        x = self.pos_drop(x)
+        # for layer in self.layers:
+        #     x = layer(x)
+        # Bottom-up
+        c1, d1 = self.layers[0](x)
+        c2, d2 = self.layers[1](c1)
+        c3, d3 = self.layers[2](c2)
+        c4, d4 = self.layers[3](c3)
+
+        # Top-down
+        # p4 = self.toplayer(d4)
+        # p3 = self._upsample_add(p4, d3, i_layer=2)
+        # p3 = self.latlayer3(p3)
+        # p2 = self._upsample_add(p3, d2, i_layer=1)
+        # p2 = self.latlayer2(p2)
+        # p1 = self._upsample_add(p2, d1, i_layer=0)
+        # p1 = self.latlayer1(p1)
+
+        p4 = self.norm_pyramid4(d4)
+        m4 = F.softmax(torch.sum(p4, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_4)
+        p4 = m4 * p4
+        p4 = torch.flatten(self.avgpool(p4.transpose(1, 2)), 1)
+        # p4 = torch.sum(p4, dim=1)
+        p3 = self.norm_pyramid3(d3)
+        m3 = F.softmax(torch.sum(p3, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_3)
+        p3 = m3 * p3
+        p3 = torch.flatten(self.avgpool(p3.transpose(1, 2)), 1)
+        # p3 = torch.sum(p3, dim=1)
+        p2 = self.norm_pyramid2(d2)
+        m2 = F.softmax(torch.sum(p2, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_2)
+        p2 = m2 * p2
+        p2 = torch.flatten(self.avgpool(p2.transpose(1, 2)), 1)
+        # p2 = torch.sum(p2, dim=1)
+        p1 = self.norm_pyramid1(d1)
+        m1 = F.softmax(torch.sum(p1, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_1)
+        p1 = m1 * p1
+        p1 = torch.flatten(self.avgpool(p1.transpose(1, 2)), 1)
+        # p1 = torch.sum(p1, dim=1)
+
+        p2 = p2 + self.uplayer1(p1)
+        p3 = p3 + self.uplayer2(p2)
+        p4 = p4 + self.uplayer3(p3)
+
+        # p = torch.cat([p4, p3, p2, p1], dim=1)
+        # print("p shape: ", p.shape)
+        x = self.norm(c4)  # B L C
+        x = self.avgpool(x.transpose(1, 2))  # B C 1
+        x = torch.flatten(x, 1)
+
+        p = x + p4
+        # if self.method == 'concat':
+        #     p = torch.cat([x, p], dim=1)
+        return p
+
+    def forward(self, x):
+        x = self.forward_features(x)
+        # x = self.head(x)
+        return x
+
+    def flops(self):
+        flops = 0
+        flops += self.patch_embed.flops()
+        for i, layer in enumerate(self.layers):
+            flops += layer.flops()
+        flops += self.num_features * self.patches_resolution[0] * self.patches_resolution[1] // (2 ** self.num_layers)
+        flops += self.num_features * self.num_classes
+        return flops
+
+
+
+class SwinTransformer_Pyramid_M7(nn.Module):
+    r""" Swin Transformer
+        A PyTorch impl of : `Swin Transformer: Hierarchical Vision Transformer using Shifted Windows`  -
+          https://arxiv.org/pdf/2103.14030
+
+    Args:
+        img_size (int | tuple(int)): Input image size. Default 224
+        patch_size (int | tuple(int)): Patch size. Default: 4
+        in_chans (int): Number of input image channels. Default: 3
+        num_classes (int): Number of classes for classification head. Default: 1000
+        embed_dim (int): Patch embedding dimension. Default: 96
+        depths (tuple(int)): Depth of each Swin Transformer layer.
+        num_heads (tuple(int)): Number of attention heads in different layers.
+        window_size (int): Window size. Default: 7
+        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim. Default: 4
+        qkv_bias (bool): If True, add a learnable bias to query, key, value. Default: True
+        qk_scale (float): Override default qk scale of head_dim ** -0.5 if set. Default: None
+        drop_rate (float): Dropout rate. Default: 0
+        attn_drop_rate (float): Attention dropout rate. Default: 0
+        drop_path_rate (float): Stochastic depth rate. Default: 0.1
+        norm_layer (nn.Module): Normalization layer. Default: nn.LayerNorm.
+        ape (bool): If True, add absolute position embedding to the patch embedding. Default: False
+        patch_norm (bool): If True, add normalization after patch embedding. Default: True
+        use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False
+    """
+
+    def __init__(self, method=None, pretrained_path=None, img_size=224, patch_size=4, in_chans=3, num_classes=1000,
+                 embed_dim=96, depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24],
+                 window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
+                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
+                 norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
+                 use_checkpoint=False, **kwargs):
+        super().__init__()
+
+        self.num_classes = num_classes
+        self.num_layers = len(depths)
+        self.embed_dim = embed_dim
+        self.ape = ape
+        self.patch_norm = patch_norm
+        self.method = method
+        self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
+        if self.method == 'concat':
+            self.num_features = int(embed_dim * 2 ** (self.num_layers - 1)) * 2
+        self.mlp_ratio = mlp_ratio
+        
+        self.layer_features_1 = embed_dim
+        self.layer_features_2 = 2 * embed_dim
+        self.layer_features_3 = 4 * embed_dim
+        self.layer_features_4 = 8 * embed_dim
+        self.pyramid_features = 2 * embed_dim
+        # split image into non-overlapping patches
+        self.patch_embed = PatchEmbed(
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+            norm_layer=norm_layer if self.patch_norm else None)
+        num_patches = self.patch_embed.num_patches
+        patches_resolution = self.patch_embed.patches_resolution
+        self.patches_resolution = patches_resolution
+
+        # absolute position embedding
+        if self.ape:
+            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+            trunc_normal_(self.absolute_pos_embed, std=.02)
+
+        self.pos_drop = nn.Dropout(p=drop_rate)
+
+        # stochastic depth
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
+
+        # build layers
+        self.layers = nn.ModuleList()
+        # self.pyramids = nn.ModuleList()
+        for i_layer in range(self.num_layers):
+            layer = BasicLayer_P(dim=int(embed_dim * 2 ** i_layer),
+                               input_resolution=(patches_resolution[0] // (2 ** i_layer),
+                                                 patches_resolution[1] // (2 ** i_layer)),
+                               depth=depths[i_layer],
+                               num_heads=num_heads[i_layer],
+                               window_size=window_size,
+                               mlp_ratio=self.mlp_ratio,
+                               qkv_bias=qkv_bias, qk_scale=qk_scale,
+                               drop=drop_rate, attn_drop=attn_drop_rate,
+                               drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],
+                               norm_layer=norm_layer,
+                               downsample=PatchMerging if (i_layer < self.num_layers - 1) else None,
+                               use_checkpoint=use_checkpoint)
+
+            self.layers.append(layer)
+
+        self.norm = norm_layer(self.layer_features_4)
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
+        # self.head = nn.Linear(self.self.num_features, num_classes) if num_classes > 0 else nn.Identity()
+        self.toplayer = nn.Linear(self.layer_features_4, self.layer_features_3, bias=False)
+        self.latlayer3 = nn.Linear(self.layer_features_3, self.layer_features_2, bias=False)
+        self.latlayer2 = nn.Linear(self.layer_features_2, self.layer_features_1, bias=False)
+        self.latlayer1 = nn.Linear(self.layer_features_1, self.layer_features_1, bias=False)
+        self.norm_pyramid1 = norm_layer(self.layer_features_1)
+        self.norm_pyramid2 = norm_layer(self.layer_features_1)
+        self.norm_pyramid3 = norm_layer(self.layer_features_2)
+        self.norm_pyramid4 = norm_layer(self.layer_features_3)
+
+        self.uplayer2 = nn.Linear(self.layer_features_1, self.layer_features_2, bias=False)
+        self.uplayer3 = nn.Linear(self.layer_features_2, self.layer_features_3, bias=False)
+        self.uplayer4 = nn.Linear(self.layer_features_3, self.layer_features_4, bias=False)
+        
+
+        self.apply(self._init_weights)
+
+    def _upsample_add(self, x, y, i_layer=0):
+        B, Ly, C = y.shape
+        H, W = self.patches_resolution[0] // (2 ** i_layer), self.patches_resolution[1] // (2 ** i_layer)
+        assert Ly == H * W
+        B, Lx, C = x.shape
+        assert Lx == H * W // 4
+        x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
+        x = F.interpolate(x, size=(H, W), mode='bilinear')
+        x = x.transpose(1, 2).transpose(2, 3)
+        x = x.view(B, Ly, C)
+        return x + y
+
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    # def init_pyramids(self, ckpt):
+    #     ckpt_pyramids = collections.OrderedDict()
+    #     for k, v in ckpt['model'].items():
+    #         if 'downsample' in k:
+    #             k_1 = k.replace('layers.', '').replace('downsample.', '')
+    #             ckpt_pyramids[k_1] = v
+    #             #del ckpt['model'][k]
+    #     self.pyramids.load_state_dict(ckpt_pyramids, strict=False)
+
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return {'absolute_pos_embed'}
+
+    @torch.jit.ignore
+    def no_weight_decay_keywords(self):
+        return {'relative_position_bias_table'}
+
+    def forward_features(self, x):
+        x = self.patch_embed(x)
+        if self.ape:
+            x = x + self.absolute_pos_embed
+        x = self.pos_drop(x)
+        # for layer in self.layers:
+        #     x = layer(x)
+        # Bottom-up
+        c1, d1 = self.layers[0](x)
+        c2, d2 = self.layers[1](c1)
+        c3, d3 = self.layers[2](c2)
+        c4, d4 = self.layers[3](c3)
+
+        # Top-down
+        p4 = self.toplayer(d4)
+        p3 = self._upsample_add(p4, d3, i_layer=2)
+        p3 = self.latlayer3(p3)
+        p2 = self._upsample_add(p3, d2, i_layer=1)
+        p2 = self.latlayer2(p2)
+        p1 = self._upsample_add(p2, d1, i_layer=0)
+        # p1 = self.latlayer1(p1)
+
+        p4 = self.norm_pyramid4(p4)
+        m4 = F.softmax(torch.sum(p4, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_3)
+        p4 = m4 * p4
+        p4 = torch.flatten(self.avgpool(p4.transpose(1, 2)), 1)
+        # p4 = torch.sum(p4, dim=1)
+        p3 = self.norm_pyramid3(p3)
+        m3 = F.softmax(torch.sum(p3, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_2)
+        p3 = m3 * p3
+        p3 = torch.flatten(self.avgpool(p3.transpose(1, 2)), 1)
+        # p3 = torch.sum(p3, dim=1)
+        p2 = self.norm_pyramid2(p2)
+        m2 = F.softmax(torch.sum(p2, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_1)
+        p2 = m2 * p2
+        p2 = torch.flatten(self.avgpool(p2.transpose(1, 2)), 1)
+        # p2 = torch.sum(p2, dim=1)
+        p1 = self.norm_pyramid1(p1)
+        m1 = F.softmax(torch.sum(p1, axis=2), dim=1).unsqueeze(axis=2).repeat(1, 1, self.layer_features_1)
+        p1 = m1 * p1
+        p1 = torch.flatten(self.avgpool(p1.transpose(1, 2)), 1)
+        # p1 = torch.sum(p1, dim=1)
+
+        p2 = p1 + p2
+        p3 = p3 + self.uplayer2(p2)
+        p4 = p4 + self.uplayer3(p3)
+        p4 = self.uplayer4(p4)
+        # p = torch.cat([p4, p3, p2, p1], dim=1)
+        # print("p shape: ", p.shape)
+        x = self.norm(c4)  # B L C
+        x = self.avgpool(x.transpose(1, 2))  # B C 1
+        x = torch.flatten(x, 1)
+        if self.method == 'concat':
+            p = torch.cat([x, p4], dim=1)
+        else:
+            p = x + p4
         return p
 
     def forward(self, x):
