@@ -28,12 +28,14 @@ class ADSH_Loss(nn.Module):
 
 
 class SP_Loss(nn.Module):
-    def __init__(self):
+    def __init__(self, t=1.0):
         super(SP_Loss, self).__init__()
+        self.t = t
+        self.relu = nn.ReLU(inplace=True)
     
     def forward(self, sp_v):
         # sp_v = F.softmax(sp_v, dim=2)
-        sp_loss = torch.tensor(0).cuda()
+        sp_loss = torch.zeros(sp_v.shape[0]).cuda()
         att_size = sp_v.shape[1]
         cnt = 0
         for i in range(att_size-1):
@@ -41,7 +43,7 @@ class SP_Loss(nn.Module):
                 sp_loss = sp_loss + torch.norm(torch.sqrt(sp_v[:,i,:]) - torch.sqrt(sp_v[:,j,:]), dim = 1)
                 cnt += 1
         sp_loss = sp_loss / _SQRT2 / cnt
-        sp_loss = (1 - sp_loss).sum()
+        sp_loss = self.relu(self.t - sp_loss).sum()
         return sp_loss / sp_v.shape[0]
 
 

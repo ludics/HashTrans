@@ -124,8 +124,8 @@ def main(args, config):
         logger.info("cls xent")
     crt_hash = DCHLoss(config)
 
-    crt_sp = SP_Loss()
-    crt_ch = CH_Loss()
+    crt_sp = SP_Loss(t=config.HASH.SP_T)
+    crt_ch = CH_Loss(t=config.HASH.CH_T)
     
     max_accuracy = 0.0
 
