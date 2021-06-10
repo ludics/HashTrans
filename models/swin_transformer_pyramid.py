@@ -744,7 +744,7 @@ class SwinTransformer_Pyramid_M2(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.upsample(x, size=(H, W), mode='bilinear')
+        x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=True)
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
@@ -943,7 +943,7 @@ class SwinTransformer_Pyramid_M4(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.upsample(x, size=(H, W), mode='bilinear')
+        x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=True)
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
@@ -1144,7 +1144,7 @@ class SwinTransformer_Pyramid_M3(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.upsample(x, size=(H, W), mode='bilinear')
+        x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=True)
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
@@ -1357,7 +1357,7 @@ class SwinTransformer_Pyramid_M5(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.upsample(x, size=(H, W), mode='bilinear')
+        x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=True)
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
@@ -1558,7 +1558,7 @@ class SwinTransformer_Pyramid_M6(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.interpolate(x, size=(H, W), mode='bilinear')
+        x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=True)
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
@@ -1644,9 +1644,10 @@ class SwinTransformer_Pyramid_M6(nn.Module):
         x = self.avgpool(x.transpose(1, 2))  # B C 1
         x = torch.flatten(x, 1)
 
-        p = x + p4
-        # if self.method == 'concat':
-        #     p = torch.cat([x, p], dim=1)
+        if self.method == 'concat':
+            p = torch.cat([x, p4], dim=1)
+        else:
+            p = x + p4
         return p
 
     def forward(self, x):
@@ -1779,7 +1780,7 @@ class SwinTransformer_Pyramid_M7(nn.Module):
         B, Lx, C = x.shape
         assert Lx == H * W // 4
         x = x.view(B, H // 2, W // 2, C).transpose(2, 3).transpose(1, 2)
-        x = F.interpolate(x, size=(H, W), mode='bilinear')
+        x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=True)
         x = x.transpose(1, 2).transpose(2, 3)
         x = x.view(B, Ly, C)
         return x + y
