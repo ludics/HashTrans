@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import timm
 
 from .build import build_model
+from .swin_transformer import Mlp
 
 
 class DSHNet(nn.Module):
@@ -49,7 +50,10 @@ class DSHNet(nn.Module):
             del ckpt
             self.num_features = self.swin.num_features
         self.model_type = config.MODEL.TYPE
-        self.hash_layer = nn.Linear(self.num_features, config.HASH.HASH_BIT)
+        if config.HASH.HASH_LAYER == 'fc':
+            self.hash_layer = nn.Linear(self.num_features, config.HASH.HASH_BIT)
+        elif config.HASH.HASH_LAYER == 'mlp':
+            self.hash_layer = Mlp(self.num_features, 4 * config.HASH.HASH_BIT, config.HASH.HASH_BIT)
         # self.cls_head = nn.Linear(self.num_features, config.MODEL.NUM_CLASSES)
         self.cls_head = nn.Linear(config.HASH.HASH_BIT, config.MODEL.NUM_CLASSES)
     

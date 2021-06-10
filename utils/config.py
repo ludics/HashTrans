@@ -161,7 +161,9 @@ _C.HASH.PRETRAINED = './downloads/swin_tiny_patch4_window7_224.pth'
 _C.HASH.NUM_SAMPLES = 2000
 _C.HASH.LAMBD_SP = 1.0
 _C.HASH.LAMBD_CH = 1.0
-
+_C.HASH.SP_T = 1.0
+_C.HASH.CH_T = 0.4
+_C.HASH.HASH_LAYER = 'fc'
 
 # -----------------------------------------------------------------------------
 # Misc
