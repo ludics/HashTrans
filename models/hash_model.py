@@ -41,6 +41,13 @@ class DSHNet(nn.Module):
             # self.swin.init_pyramids(ckpt)
             del ckpt
             self.num_features = self.swin.num_features
+        elif config.MODEL.TYPE.startswith('swin_gwl_pyramid'):
+            self.swin = build_model(config)
+            ckpt = torch.load(config.HASH.PRETRAINED, map_location='cpu')
+            msg = self.swin.load_state_dict(ckpt['model'], strict=False)
+            # self.swin.init_pyramids(ckpt)
+            del ckpt
+            self.num_features = self.swin.num_features
         self.model_type = config.MODEL.TYPE
         self.hash_layer = nn.Linear(self.num_features, config.HASH.HASH_BIT)
         # self.cls_head = nn.Linear(self.num_features, config.MODEL.NUM_CLASSES)

@@ -115,11 +115,13 @@ def main(args, config):
     if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
         crt_cls = SoftTargetCrossEntropy()
+        logger.info("soft target cls")
     elif config.MODEL.LABEL_SMOOTHING > 0.:
         crt_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
+        logger.info("label smoothing cls")
     else:
         crt_cls = torch.nn.CrossEntropyLoss()
-    
+        logger.info("cls xent")
     crt_hash = DCHLoss(config)
 
     crt_sp = SP_Loss()
@@ -305,9 +307,9 @@ def validate(config, model, test_loader, database_loader):
 
     end = time.time()
     test_codes, test_labels = code_generator(model, test_loader, logger)
-    test_labels_onehot = torch.eye(config.MODEL.NUM_CLESSES)[test_labels].cuda(non_blocking=True)
+    test_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[test_labels].cuda(non_blocking=True)
     gallery_codes, gallery_labels = code_generator(model, database_loader, logger)
-    gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLESSES)[gallery_labels].cuda(non_blocking=True)
+    gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[gallery_labels].cuda(non_blocking=True)
     # mAP = CalcTopMap(gallery_codes, test_codes, gallery_labels_onehot.numpy(),
     #                  test_labels_onehot.numpy(), 10000)
     mAP = mean_average_precision(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
