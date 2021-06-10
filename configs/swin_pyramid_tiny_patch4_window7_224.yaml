@@ -1,5 +1,5 @@
 MODEL:
-  TYPE: swin_pyramid_m4
+  TYPE: swin_pyramid_m7
   NAME: swin_tiny_patch4_window7_224
   DROP_PATH_RATE: 0.2
   SWIN:
@@ -7,6 +7,7 @@ MODEL:
     DEPTHS: [ 2, 2, 6, 2 ]
     NUM_HEADS: [ 3, 6, 12, 24 ]
     WINDOW_SIZE: 7
+  METHOD: concat
 TRAIN:
   BASE_LR: 5e-4
   EPOCHS: 300
