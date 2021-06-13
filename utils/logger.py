@@ -13,7 +13,7 @@ from termcolor import colored
 
 
 @functools.lru_cache()
-def create_logger(output_dir, dist_rank=0, name=''):
+def create_logger(output_dir, dist_rank=0, show_rank=0, name=''):
     # create logger
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -25,7 +25,7 @@ def create_logger(output_dir, dist_rank=0, name=''):
                 colored('(%(filename)s %(lineno)d)', 'yellow') + ': %(levelname)s %(message)s'
 
     # create console handlers for master process
-    if dist_rank == 0:
+    if dist_rank == show_rank:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.DEBUG)
         console_handler.setFormatter(

@@ -1,4 +1,4 @@
-# --------------------------------------------------------
+
 # Swin Transformer
 # Copyright (c) 2021 Microsoft
 # Licensed under The MIT License [see LICENSE for details]
@@ -20,11 +20,20 @@ from timm.utils import accuracy, AverageMeter
 
 from utils.config import get_config
 from models import build_model
+from models.adsh_model import DSHNet
+from models.hash_loss import DCHLoss
 from data import build_loader
 from utils.lr_scheduler import build_scheduler
 from utils.optimizer import build_optimizer
 from utils.logger import create_logger
 from utils.utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_resume_helper, reduce_tensor
+from utils.feat_extractor import feat_extractor, code_generator
+from utils.tools import CalcTopMap
+from utils.ret_metric import RetMetric
+
+from models.adsh_loss import ADSH_Loss
+from data.build import sample_dataloader
+import utils.evaluate as evaluate
 
 try:
     # noinspection PyUnresolvedReferences
@@ -62,13 +71,16 @@ def parse_option():
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
-
+    
     parser.add_argument('--hash_bit', type=int, default=64, help="Num of hashbit")
     parser.add_argument('--gamma', type=float, default=20.0, help="Cauchy loss gamma")
     parser.add_argument('--lambd', type=float, default=0.1, help="Cauchy loss lambd")
+    parser.add_argument('--lambd_cls', type=float, default=1.0, help="CLS loss lambd")
     parser.add_argument('--pretrained', help='resume from checkpoint')
+
     # distributed training
     parser.add_argument("--local_rank", type=int, required=True, help='local rank for DistributedDataParallel')
+    parser.add_argument("--valid_rank", type=int, default=0, help='rank for validation gpu')
 
     args, unparsed = parser.parse_known_args()
 
@@ -76,19 +88,71 @@ def parse_option():
 
     return args, config
 
+def solve_dcc(B, U, expand_U, S, code_length, gamma):
+    """
+    Solve DCC problem.
+    """
+    Q = (code_length * S).t() @ U + gamma * expand_U
 
-def main(config):
-    dataset_train, dataset_val, data_loader_train, data_loader_val, _, mixup_fn = build_loader(config)
+    for bit in range(code_length):
+        q = Q[:, bit]
+        u = U[:, bit]
+        B_prime = torch.cat((B[:, :bit], B[:, bit+1:]), dim=1)
+        U_prime = torch.cat((U[:, :bit], U[:, bit+1:]), dim=1)
+
+        B[:, bit] = (q.t() - B_prime @ U_prime.t() @ u.t()).sign()
+
+    return B
+
+
+def calc_loss(U, B, S, code_length, omega, gamma):
+    """
+    Calculate loss.
+    """
+    hash_loss = ((code_length * S - U @ B.t()) ** 2).sum()
+    quantization_loss = ((U - B[omega, :]) ** 2).sum()
+    loss = (hash_loss + gamma * quantization_loss) / (U.shape[0] * B.shape[0])
+
+    return loss.item()
+
+
+def generate_code(model, dataloader, code_length):
+    """
+    Generate hash code
+
+    Args
+        dataloader(torch.utils.data.DataLoader): Data loader.
+        code_length(int): Hash code length.
+        device(torch.device): Using gpu or cpu.
+
+    Returns
+        code(torch.Tensor): Hash code.
+    """
+    model.eval()
+    with torch.no_grad():
+        N = len(dataloader.dataset)
+        code = torch.zeros([N, code_length]).cuda()
+        for data, _, index in dataloader:
+            data = data.cuda()
+            hash_code = model(data)
+            code[index, :] = hash_code.sign()
+
+    model.train()
+    return code
+
+def main(args, config):
+    dataset_train, dataset_val, train_dataloader, query_dataloader, retrieval_dataloader, mixup_fn = build_loader(config)
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
-    model = build_model(config)
+    model = DSHNet(config)
     model.cuda()
     logger.info(str(model))
 
     optimizer = build_optimizer(config, model)
     if config.AMP_OPT_LEVEL != "O0":
         model, optimizer = amp.initialize(model, optimizer, opt_level=config.AMP_OPT_LEVEL)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False,
+                                                      find_unused_parameters=True)
     model_without_ddp = model.module
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -97,15 +161,22 @@ def main(config):
         flops = model_without_ddp.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
-    lr_scheduler = build_scheduler(config, optimizer, len(data_loader_train))
 
     if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
-        criterion = SoftTargetCrossEntropy()
+        criterion_cls = SoftTargetCrossEntropy()
     elif config.MODEL.LABEL_SMOOTHING > 0.:
-        criterion = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
+        criterion_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
     else:
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion_cls = torch.nn.CrossEntropyLoss()
+    
+    criterion_hash = ADSH_Loss(config.HASH.HASH_BIT, config.HASH.GAMMA)
+    
+    num_retrieval = len(retrieval_dataloader.dataset)
+    U = torch.zeros(config.HASH.NUM_SAMPLES, config.HASH.HASH_BIT).cuda()
+    B = torch.randn(num_retrieval, config.HASH.HASH_BIT).cuda()
+    retrieval_targets = retrieval_dataloader.dataset.get_onehot_targets().cuda()
+    query_targets = query_dataloader.dataset.get_onehot_targets().cuda()
 
     max_accuracy = 0.0
 
@@ -122,61 +193,107 @@ def main(config):
             logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
 
     if config.MODEL.RESUME:
-        max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
-        acc1, acc5, loss = validate(config, data_loader_val, model)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+        # max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
+        if dist.get_rank() == args.valid_rank:
+            query_code = generate_code(model, query_dataloader, config.HASH.HASH_BIT)
+            mAP = evaluate.mean_average_precision(query_code, B, query_targets, retrieval_targets, -1)
+            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
         if config.EVAL_MODE:
             return
 
     if config.THROUGHPUT_MODE:
-        throughput(data_loader_val, model, logger)
+        throughput(query_dataloader, model, logger)
         return
 
+    train_dataloader, sample_index = sample_dataloader(retrieval_dataloader, config)
+    lr_scheduler = build_scheduler(config, optimizer, len(train_dataloader))
+
+    train_targets = train_dataloader.dataset.get_onehot_targets().cuda()
+    S = (train_targets @ retrieval_targets.t() > 0).float()
+    S = torch.where(S == 1, torch.full_like(S, 1), torch.full_like(S, -1))
+    r = S.sum() / (1 - S).sum()
+    S = S * (1 + r) - r
+    
     logger.info("Start training")
     start_time = time.time()
+    
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
-        data_loader_train.sampler.set_epoch(epoch)
+        if epoch % config.TRAIN.SAMPLE_ITER == 0:
+            train_dataloader, sample_index = sample_dataloader(retrieval_dataloader, config)
 
-        train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
-        if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
+            train_targets = train_dataloader.dataset.get_onehot_targets().cuda()
+            S = (train_targets @ retrieval_targets.t() > 0).float()
+            S = torch.where(S == 1, torch.full_like(S, 1), torch.full_like(S, -1))
 
-        acc1, acc5, loss = validate(config, data_loader_val, model)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
-        if dist.get_rank() == 0 and acc1 > max_accuracy:
-            save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger, best=True)
-        max_accuracy = max(max_accuracy, acc1)
-        logger.info(f'Max accuracy: {max_accuracy:.2f}%')
+            r = S.sum() / (1 - S).sum()
+            S = S * (1 + r) - r
+
+        train_dataloader.sampler.set_epoch(epoch)
+
+        train_one_epoch(config, model, criterion_hash, criterion_cls, train_dataloader, optimizer, epoch, mixup_fn, lr_scheduler, U, B, S, sample_index)
+        
+        # update B
+        if (epoch + 1) % config.TRAIN.SAMPLE_ITER == 0:
+            expand_U = torch.zeros(B.shape).cuda()
+            expand_U[sample_index, :] = U
+            B = solve_dcc(B, U, expand_U, S, config.HASH.HASH_BIT, config.HASH.GAMMA)
+            iter_loss = calc_loss(U, B, S, config.HASH.HASH_BIT, sample_index, config.HASH.GAMMA)
+            logger.info(f"iter {epoch // config.TRAIN.SAMPLE_ITER}: iter_loss: {iter_loss:.4f}")
+        if dist.get_rank() == args.valid_rank:
+            query_code = generate_code(model, query_dataloader, config.HASH.HASH_BIT)
+            mAP = evaluate.mean_average_precision(query_code, B, query_targets, retrieval_targets, -1)
+            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
+            if mAP > max_accuracy:
+                save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
+                torch.save(query_code.cpu(), os.path.join(config.OUTPUT, 'query_code.t'))
+                torch.save(B.cpu(), os.path.join(config.OUTPUT, 'database_code.t'))
+                torch.save(query_targets.cpu(), os.path.join(config.OUTPUT, 'query_targets.t'))
+                torch.save(retrieval_targets.cpu(), os.path.join(config.OUTPUT, 'retrieval_targets.t'))
+            max_accuracy = max(max_accuracy, mAP)
+            logger.info(f' mAP {mAP:.6f} best_mAP {max_accuracy:.6f}')
+            if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+                save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
+            logger.info(f'Max accuracy: {max_accuracy:.6f}')
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
+def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, U, B, S, sample_index):
     model.train()
     optimizer.zero_grad()
 
     num_steps = len(data_loader)
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
+    hash_loss_meter = AverageMeter()
+    cls_loss_meter = AverageMeter()
     norm_meter = AverageMeter()
 
     start = time.time()
     end = time.time()
-    for idx, (samples, targets) in enumerate(data_loader):
+    for idx, (samples, targets, index) in enumerate(data_loader):
         samples = samples.cuda(non_blocking=True)
         targets = targets.cuda(non_blocking=True)
+        index = index.cuda(non_blocking=True)
 
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
-        print("targets.shape: ", targets.shape)
-        print("targets: ", targets)
+        #print("targets.shape: ", targets.shape)
+        #print("targets: ", targets)
+        #labels = torch.eye(200)[targets].cuda(non_blocking=True)
         outputs = model(samples)
+        U[index, :] = outputs.data.type(torch.float32)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
-            loss = criterion(outputs, targets)
+            hash_loss = criterion_hash(outputs, B, S[index, :], sample_index[index])
+            # cls_loss = criterion_cls(preds, targets)
+            cls_loss = torch.tensor(0.0)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
+            cls_loss = cls_loss / config.TRAIN.ACCUMULATION_STEPS
+            hash_loss = hash_loss / config.TRAIN.ACCUMULATION_STEPS
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -195,7 +312,10 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 optimizer.zero_grad()
                 lr_scheduler.step_update(epoch * num_steps + idx)
         else:
-            loss = criterion(outputs, targets)
+            hash_loss = criterion_hash(outputs, B, S[index, :], sample_index[index])
+            # cls_loss = criterion_cls(preds, targets)
+            cls_loss = torch.tensor(0.0)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             optimizer.zero_grad()
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -216,6 +336,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         torch.cuda.synchronize()
 
         loss_meter.update(loss.item(), targets.size(0))
+        hash_loss_meter.update(hash_loss.item(), targets.size(0))
+        cls_loss_meter.update(cls_loss.item(), targets.size(0))
         norm_meter.update(grad_norm)
         batch_time.update(time.time() - end)
         end = time.time()
@@ -229,57 +351,47 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\t'
                 f'time {batch_time.val:.4f} ({batch_time.avg:.4f})\t'
                 f'loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
+                f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\t'
+                f'cls_loss {cls_loss_meter.val:.4f} ({cls_loss_meter.avg:.4f})\t'
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
                 f'mem {memory_used:.0f}MB')
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
-
+best_mapr = 0
+best_iter = -1
 @torch.no_grad()
-def validate(config, data_loader, model):
+def validate(config, model, test_loader, database_loader):
+    global best_mapr
+    global best_iter
     criterion = torch.nn.CrossEntropyLoss()
     model.eval()
-
+    
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
     acc1_meter = AverageMeter()
     acc5_meter = AverageMeter()
 
     end = time.time()
-    for idx, (images, target) in enumerate(data_loader):
-        images = images.cuda(non_blocking=True)
-        target = target.cuda(non_blocking=True)
-
-        # compute output
-        output = model(images)
-
-        # measure accuracy and record loss
-        loss = criterion(output, target)
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
-        acc1 = reduce_tensor(acc1)
-        acc5 = reduce_tensor(acc5)
-        loss = reduce_tensor(loss)
-
-        loss_meter.update(loss.item(), target.size(0))
-        acc1_meter.update(acc1.item(), target.size(0))
-        acc5_meter.update(acc5.item(), target.size(0))
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if idx % config.PRINT_FREQ == 0:
-            memory_used = torch.cuda.max_memory_allocated() / (1024.0 * 1024.0)
-            logger.info(
-                f'Test: [{idx}/{len(data_loader)}]\t'
-                f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                f'Loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
-                f'Acc@1 {acc1_meter.val:.3f} ({acc1_meter.avg:.3f})\t'
-                f'Acc@5 {acc5_meter.val:.3f} ({acc5_meter.avg:.3f})\t'
-                f'Mem {memory_used:.0f}MB')
-    logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
-    return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
+    test_codes, test_labels = code_generator(model, test_loader, logger)
+    test_labels_onehot = torch.eye(200)[test_labels]
+    gallery_coes, gallery_labels = code_generator(model, database_loader, logger)
+    gallery_labels_onehot = torch.eye(200)[gallery_labels]
+    mAP = CalcTopMap(gallery_coes, test_codes, gallery_labels_onehot.numpy(),
+                     test_labels_onehot.numpy(), 10000)
+    pr_range = [10, 20, 40, 80]
+    codes = [gallery_coes, test_codes]
+    labels = [gallery_labels.numpy(), test_labels.numpy()]
+    if mAP > best_mapr:
+        best_mapr = mAP
+    logger.info(f' mAP {mAP:.6f} best_mAP {best_mapr:.6f}')
+    #r_k_func = RetMetric(codes, labels, hamming_dis=True)
+    #r_k_list = []
+    #logger.info(f'Recall@K\t')
+    #for i, k in enumerate(pr_range):
+    #    v = r_k_func.recall_k(k)
+    #    logger.info(f'{k}: {v:.6f}')
+    return mAP
 
 
 @torch.no_grad()
@@ -303,7 +415,7 @@ def throughput(data_loader, model, logger):
 
 
 if __name__ == '__main__':
-    _, config = parse_option()
+    args, config = parse_option()
 
     if config.AMP_OPT_LEVEL != "O0":
         assert amp is not None, "amp not installed!"
@@ -340,7 +452,7 @@ if __name__ == '__main__':
     config.freeze()
 
     os.makedirs(config.OUTPUT, exist_ok=True)
-    logger = create_logger(output_dir=config.OUTPUT, dist_rank=dist.get_rank(), name=f"{config.MODEL.NAME}")
+    logger = create_logger(output_dir=config.OUTPUT, dist_rank=dist.get_rank(), show_rank=args.valid_rank, name=f"{config.MODEL.NAME}")
 
     if dist.get_rank() == 0:
         path = os.path.join(config.OUTPUT, "config.json")
@@ -351,4 +463,7 @@ if __name__ == '__main__':
     # print config
     logger.info(config.dump())
 
-    main(config)
+    main(args, config)
+
+
+

@@ -1,6 +1,6 @@
 MODEL:
-  TYPE: swin
-  NAME: swin_base_patch4_window7_224
+  TYPE: resnet
+  NAME: tv_resnet152
   DROP_PATH_RATE: 0.5
   SWIN:
     EMBED_DIM: 128
@@ -14,4 +14,4 @@ HASH:
   HASH_BIT: 32
   LAMBD: 0.1
   LAMBD_CLS: 0.1
-  PRETRAINED: downloads/swin_base_patch4_window7_224_22k.pth
+  PRETRAINED: downloads/swin_tiny_patch4_window7_224.pth

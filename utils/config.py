@@ -23,7 +23,8 @@ _C.DATA.BATCH_SIZE = 128
 # Path to dataset, could be overwritten by command line argument
 _C.DATA.DATA_PATH = ''
 # Dataset name
-_C.DATA.DATASET = 'imagenet'
+# _C.DATA.DATASET = 'imagenet'
+_C.DATA.DATASET = 'CUB_200_2011'
 # Input image size
 _C.DATA.IMG_SIZE = 224
 # Interpolation to resize image (random, bilinear, bicubic)
@@ -57,6 +58,7 @@ _C.MODEL.DROP_PATH_RATE = 0.1
 # Label Smoothing
 _C.MODEL.LABEL_SMOOTHING = 0.1
 
+_C.MODEL.ATT_SIZE = 4
 # Swin Transformer parameters
 _C.MODEL.SWIN = CN()
 _C.MODEL.SWIN.PATCH_SIZE = 4
@@ -71,6 +73,7 @@ _C.MODEL.SWIN.QK_SCALE = None
 _C.MODEL.SWIN.APE = False
 _C.MODEL.SWIN.PATCH_NORM = True
 
+_C.MODEL.METHOD = None
 # -----------------------------------------------------------------------------
 # Training settings
 # -----------------------------------------------------------------------------
@@ -78,10 +81,10 @@ _C.TRAIN = CN()
 _C.TRAIN.START_EPOCH = 0
 _C.TRAIN.EPOCHS = 300
 _C.TRAIN.WARMUP_EPOCHS = 20
-_C.TRAIN.WEIGHT_DECAY = 0.05
-_C.TRAIN.BASE_LR = 5e-4
+_C.TRAIN.WEIGHT_DECAY = 5e-4
+_C.TRAIN.BASE_LR = 5e-5
 _C.TRAIN.WARMUP_LR = 5e-7
-_C.TRAIN.MIN_LR = 5e-6
+_C.TRAIN.MIN_LR = 5e-7
 # Clip gradient norm
 _C.TRAIN.CLIP_GRAD = 5.0
 # Auto resume from latest checkpoint
@@ -92,6 +95,8 @@ _C.TRAIN.ACCUMULATION_STEPS = 0
 # Whether to use gradient checkpointing to save memory
 # could be overwritten by command line argument
 _C.TRAIN.USE_CHECKPOINT = False
+
+_C.TRAIN.SAMPLE_ITER = 10
 
 # LR scheduler
 _C.TRAIN.LR_SCHEDULER = CN()
@@ -126,9 +131,11 @@ _C.AUG.REMODE = 'pixel'
 # Random erase count
 _C.AUG.RECOUNT = 1
 # Mixup alpha, mixup enabled if > 0
-_C.AUG.MIXUP = 0.8
+# _C.AUG.MIXUP = 0.8
+_C.AUG.MIXUP = 0
 # Cutmix alpha, cutmix enabled if > 0
-_C.AUG.CUTMIX = 1.0
+# _C.AUG.CUTMIX = 1.0
+_C.AUG.CUTMIX = 0
 # Cutmix min/max ratio, overrides alpha and enables cutmix if set
 _C.AUG.CUTMIX_MINMAX = None
 # Probability of performing mixup or cutmix when either/both is enabled
@@ -145,6 +152,19 @@ _C.TEST = CN()
 # Whether to use center crop when testing
 _C.TEST.CROP = True
 
+_C.HASH = CN()
+_C.HASH.HASH_BIT = 64
+_C.HASH.GAMMA = 20.0
+_C.HASH.LAMBD = 0.1
+_C.HASH.LAMBD_CLS = 0.1
+_C.HASH.PRETRAINED = './downloads/swin_tiny_patch4_window7_224.pth'
+_C.HASH.NUM_SAMPLES = 2000
+_C.HASH.LAMBD_SP = 1.0
+_C.HASH.LAMBD_CH = 1.0
+_C.HASH.SP_T = 1.0
+_C.HASH.CH_T = 0.4
+_C.HASH.HASH_LAYER = 'fc'
+
 # -----------------------------------------------------------------------------
 # Misc
 # -----------------------------------------------------------------------------
@@ -156,7 +176,7 @@ _C.OUTPUT = ''
 # Tag of experiment, overwritten by command line argument
 _C.TAG = 'default'
 # Frequency to save checkpoint
-_C.SAVE_FREQ = 1
+_C.SAVE_FREQ = 30
 # Frequency to logging info
 _C.PRINT_FREQ = 10
 # Fixed random seed
@@ -216,12 +236,16 @@ def update_config(config, args):
         config.EVAL_MODE = True
     if args.throughput:
         config.THROUGHPUT_MODE = True
-
+    if args.hash_bit != -1:
+        config.HASH.HASH_BIT = args.hash_bit
+    if args.dataset:
+        config.DATA.DATASET = args.dataset
+    config.MODEL.ATT_SIZE = args.att_size
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
 
     # output folder
-    config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.NAME, config.TAG)
+    config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.TYPE, config.MODEL.NAME, config.TAG)
 
     config.freeze()
 

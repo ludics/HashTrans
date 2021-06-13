@@ -1,4 +1,4 @@
-# --------------------------------------------------------
+
 # Swin Transformer
 # Copyright (c) 2021 Microsoft
 # Licensed under The MIT License [see LICENSE for details]
@@ -20,11 +20,18 @@ from timm.utils import accuracy, AverageMeter
 
 from utils.config import get_config
 from models import build_model
+from models.hash_model import DSHNet
+from models.hash_loss import DCHLoss
 from data import build_loader
 from utils.lr_scheduler import build_scheduler
 from utils.optimizer import build_optimizer
 from utils.logger import create_logger
 from utils.utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_resume_helper, reduce_tensor
+from utils.feat_extractor import feat_extractor, code_generator
+from utils.tools import CalcTopMap
+from utils.ret_metric import RetMetric
+from models.exchnet_loss import SP_Loss, CH_Loss
+from utils.evaluate import mean_average_precision
 
 try:
     # noinspection PyUnresolvedReferences
@@ -46,6 +53,7 @@ def parse_option():
     # easy config modification
     parser.add_argument('--batch-size', type=int, help="batch size for single GPU")
     parser.add_argument('--data-path', type=str, help='path to dataset')
+    parser.add_argument('--dataset', type=str, default=None, help='path to dataset')
     parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
     parser.add_argument('--cache-mode', type=str, default='part', choices=['no', 'full', 'part'],
                         help='no: no cache, '
@@ -62,13 +70,17 @@ def parse_option():
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
-
-    parser.add_argument('--hash_bit', type=int, default=64, help="Num of hashbit")
+    
+    parser.add_argument('--hash_bit', type=int, default=-1, help="Num of hashbit")
+    parser.add_argument('--att_size', type=int, default=4, help="Num of att size")
     parser.add_argument('--gamma', type=float, default=20.0, help="Cauchy loss gamma")
     parser.add_argument('--lambd', type=float, default=0.1, help="Cauchy loss lambd")
+    parser.add_argument('--lambd_cls', type=float, default=1.0, help="CLS loss lambd")
     parser.add_argument('--pretrained', help='resume from checkpoint')
+
     # distributed training
     parser.add_argument("--local_rank", type=int, required=True, help='local rank for DistributedDataParallel')
+    parser.add_argument("--valid_rank", type=int, default=0, help='rank for validation gpu')
 
     args, unparsed = parser.parse_known_args()
 
@@ -77,18 +89,19 @@ def parse_option():
     return args, config
 
 
-def main(config):
-    dataset_train, dataset_val, data_loader_train, data_loader_val, _, mixup_fn = build_loader(config)
+def main(args, config):
+    dataset_train, dataset_val, data_loader_train, data_loader_val, data_loader_gallery, mixup_fn = build_loader(config)
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
-    model = build_model(config)
+    model = DSHNet(config)
     model.cuda()
     logger.info(str(model))
 
     optimizer = build_optimizer(config, model)
     if config.AMP_OPT_LEVEL != "O0":
         model, optimizer = amp.initialize(model, optimizer, opt_level=config.AMP_OPT_LEVEL)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False,
+                                                      find_unused_parameters=True)
     model_without_ddp = model.module
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -101,12 +114,19 @@ def main(config):
 
     if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
-        criterion = SoftTargetCrossEntropy()
+        crt_cls = SoftTargetCrossEntropy()
+        logger.info("soft target cls")
     elif config.MODEL.LABEL_SMOOTHING > 0.:
-        criterion = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
+        crt_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
+        logger.info("label smoothing cls")
     else:
-        criterion = torch.nn.CrossEntropyLoss()
+        crt_cls = torch.nn.CrossEntropyLoss()
+        logger.info("cls xent")
+    crt_hash = DCHLoss(config)
 
+    crt_sp = SP_Loss(t=config.HASH.SP_T)
+    crt_ch = CH_Loss(t=config.HASH.CH_T)
+    
     max_accuracy = 0.0
 
     if config.TRAIN.AUTO_RESUME:
@@ -122,9 +142,10 @@ def main(config):
             logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
 
     if config.MODEL.RESUME:
-        max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
-        acc1, acc5, loss = validate(config, data_loader_val, model)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+        # max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
+        if dist.get_rank() == args.valid_rank:
+            mAP = validate(config, model, data_loader_val, data_loader_gallery)
+            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
         if config.EVAL_MODE:
             return
 
@@ -137,29 +158,36 @@ def main(config):
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
         data_loader_train.sampler.set_epoch(epoch)
 
-        train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
-        if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
-
-        acc1, acc5, loss = validate(config, data_loader_val, model)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
-        if dist.get_rank() == 0 and acc1 > max_accuracy:
-            save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger, best=True)
-        max_accuracy = max(max_accuracy, acc1)
-        logger.info(f'Max accuracy: {max_accuracy:.2f}%')
+        train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
+        if dist.get_rank() == args.valid_rank:
+            mAP = validate(config, model, data_loader_val, data_loader_gallery)
+            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
+            if mAP > max_accuracy:
+                save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
+            max_accuracy = max(max_accuracy, mAP)
+            # if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+            if (epoch == (config.TRAIN.EPOCHS - 1)):
+                save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
+            logger.info(f'Max accuracy: {max_accuracy:.6f}')
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
+def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
     model.train()
     optimizer.zero_grad()
 
     num_steps = len(data_loader)
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
+    closs_meter = AverageMeter()
+    qloss_meter = AverageMeter()
+    hash_loss_meter = AverageMeter()
+    cls_loss_meter = AverageMeter()
+    sp_loss_meter = AverageMeter()
+    ch_loss_meter = AverageMeter()
     norm_meter = AverageMeter()
 
     start = time.time()
@@ -170,13 +198,25 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
 
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
-        print("targets.shape: ", targets.shape)
-        print("targets: ", targets)
-        outputs = model(samples)
+        #print("targets.shape: ", targets.shape)
+        #print("targets: ", targets)
+        labels = torch.eye(config.MODEL.NUM_CLASSES)[targets].cuda(non_blocking=True)
+        outputs, preds, sp_v, ch_v = model(samples)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
-            loss = criterion(outputs, targets)
+            hash_loss, c_loss, q_loss = crt_hash(outputs, labels)
+            cls_loss = crt_cls(preds, targets)
+            sp_loss = crt_sp(sp_v)
+            ch_loss = crt_sp(ch_v)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss + \
+                 config.HASH.LAMBD_SP * sp_loss + config.HASH.LAMBD_CH * ch_loss
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
+            c_loss = c_loss / config.TRAIN.ACCUMULATION_STEPS
+            q_loss = q_loss / config.TRAIN.ACCUMULATION_STEPS
+            cls_loss = cls_loss / config.TRAIN.ACCUMULATION_STEPS
+            hash_loss = hash_loss / config.TRAIN.ACCUMULATION_STEPS
+            sp_loss = sp_loss / config.TRAIN.ACCUMULATION_STEPS
+            ch_loss = ch_loss / config.TRAIN.ACCUMULATION_STEPS
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -195,7 +235,12 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 optimizer.zero_grad()
                 lr_scheduler.step_update(epoch * num_steps + idx)
         else:
-            loss = criterion(outputs, targets)
+            hash_loss, c_loss, q_loss = crt_hash(outputs, labels)
+            cls_loss = crt_cls(preds, targets)
+            sp_loss = crt_sp(sp_v)
+            ch_loss = crt_sp(ch_v)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss + \
+                 config.HASH.LAMBD_SP * sp_loss + config.HASH.LAMBD_CH * ch_loss
             optimizer.zero_grad()
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -216,6 +261,12 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         torch.cuda.synchronize()
 
         loss_meter.update(loss.item(), targets.size(0))
+        closs_meter.update(c_loss.item(), targets.size(0))
+        qloss_meter.update(q_loss.item(), targets.size(0))
+        hash_loss_meter.update(hash_loss.item(), targets.size(0))
+        cls_loss_meter.update(cls_loss.item(), targets.size(0))
+        sp_loss_meter.update(sp_loss.item(), targets.size(0))
+        ch_loss_meter.update(ch_loss.item(), targets.size(0))
         norm_meter.update(grad_norm)
         batch_time.update(time.time() - end)
         end = time.time()
@@ -226,60 +277,55 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
             etas = batch_time.avg * (num_steps - idx)
             logger.info(
                 f'Train: [{epoch}/{config.TRAIN.EPOCHS}][{idx}/{num_steps}]\t'
-                f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\t'
+                f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\n'
                 f'time {batch_time.val:.4f} ({batch_time.avg:.4f})\t'
                 f'loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
+                f'closs {closs_meter.val:.4f} ({closs_meter.avg:.4f})\t'
+                f'qloss {qloss_meter.val:.4f} ({qloss_meter.avg:.4f})\t'
+                f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\n'
+                f'cls_loss {cls_loss_meter.val:.4f} ({cls_loss_meter.avg:.4f})\t'
+                f'sp_loss {sp_loss_meter.val:.4f} ({sp_loss_meter.avg:.4f})\t'
+                f'ch_loss {ch_loss_meter.val:.4f} ({ch_loss_meter.avg:.4f})\t'
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
                 f'mem {memory_used:.0f}MB')
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
-
+best_mapr = 0
+best_iter = -1
 @torch.no_grad()
-def validate(config, data_loader, model):
-    criterion = torch.nn.CrossEntropyLoss()
+def validate(config, model, test_loader, database_loader):
+    global best_mapr
+    global best_iter
+    crt = torch.nn.CrossEntropyLoss()
     model.eval()
-
+    
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
     acc1_meter = AverageMeter()
     acc5_meter = AverageMeter()
 
     end = time.time()
-    for idx, (images, target) in enumerate(data_loader):
-        images = images.cuda(non_blocking=True)
-        target = target.cuda(non_blocking=True)
-
-        # compute output
-        output = model(images)
-
-        # measure accuracy and record loss
-        loss = criterion(output, target)
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
-        acc1 = reduce_tensor(acc1)
-        acc5 = reduce_tensor(acc5)
-        loss = reduce_tensor(loss)
-
-        loss_meter.update(loss.item(), target.size(0))
-        acc1_meter.update(acc1.item(), target.size(0))
-        acc5_meter.update(acc5.item(), target.size(0))
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if idx % config.PRINT_FREQ == 0:
-            memory_used = torch.cuda.max_memory_allocated() / (1024.0 * 1024.0)
-            logger.info(
-                f'Test: [{idx}/{len(data_loader)}]\t'
-                f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                f'Loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
-                f'Acc@1 {acc1_meter.val:.3f} ({acc1_meter.avg:.3f})\t'
-                f'Acc@5 {acc5_meter.val:.3f} ({acc5_meter.avg:.3f})\t'
-                f'Mem {memory_used:.0f}MB')
-    logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
-    return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
+    test_codes, test_labels = code_generator(model, test_loader, logger)
+    test_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[test_labels].cuda(non_blocking=True)
+    gallery_codes, gallery_labels = code_generator(model, database_loader, logger)
+    gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[gallery_labels].cuda(non_blocking=True)
+    # mAP = CalcTopMap(gallery_codes, test_codes, gallery_labels_onehot.numpy(),
+    #                  test_labels_onehot.numpy(), 10000)
+    mAP = mean_average_precision(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
+    # pr_range = [10, 20, 40, 80]
+    # codes = [gallery_codes, test_codes]
+    # labels = [gallery_labels.numpy(), test_labels.numpy()]
+    if mAP > best_mapr:
+        best_mapr = mAP
+    logger.info(f' mAP {mAP:.6f} best_mAP {best_mapr:.6f}')
+    #r_k_func = RetMetric(codes, labels, hamming_dis=True)
+    #r_k_list = []
+    #logger.info(f'Recall@K\t')
+    #for i, k in enumerate(pr_range):
+    #    v = r_k_func.recall_k(k)
+    #    logger.info(f'{k}: {v:.6f}')
+    return mAP
 
 
 @torch.no_grad()
@@ -303,7 +349,7 @@ def throughput(data_loader, model, logger):
 
 
 if __name__ == '__main__':
-    _, config = parse_option()
+    args, config = parse_option()
 
     if config.AMP_OPT_LEVEL != "O0":
         assert amp is not None, "amp not installed!"
@@ -340,7 +386,7 @@ if __name__ == '__main__':
     config.freeze()
 
     os.makedirs(config.OUTPUT, exist_ok=True)
-    logger = create_logger(output_dir=config.OUTPUT, dist_rank=dist.get_rank(), name=f"{config.MODEL.NAME}")
+    logger = create_logger(output_dir=config.OUTPUT, dist_rank=dist.get_rank(), show_rank=args.valid_rank, name=f"{config.MODEL.NAME}")
 
     if dist.get_rank() == 0:
         path = os.path.join(config.OUTPUT, "config.json")
@@ -351,4 +397,4 @@ if __name__ == '__main__':
     # print config
     logger.info(config.dump())
 
-    main(config)
+    main(args, config)

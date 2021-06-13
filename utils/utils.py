@@ -23,6 +23,9 @@ def load_checkpoint(config, model, optimizer, lr_scheduler, logger):
             config.MODEL.RESUME, map_location='cpu', check_hash=True)
     else:
         checkpoint = torch.load(config.MODEL.RESUME, map_location='cpu')
+    if checkpoint['model']['head.weight'].shape[0] != model.head.out_features:
+        del checkpoint['model']['head.weight']
+        del checkpoint['model']['head.bias']
     msg = model.load_state_dict(checkpoint['model'], strict=False)
     logger.info(msg)
     max_accuracy = 0.0
@@ -43,7 +46,7 @@ def load_checkpoint(config, model, optimizer, lr_scheduler, logger):
     return max_accuracy
 
 
-def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler, logger):
+def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler, logger, best=False):
     save_state = {'model': model.state_dict(),
                   'optimizer': optimizer.state_dict(),
                   'lr_scheduler': lr_scheduler.state_dict(),
@@ -52,8 +55,10 @@ def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler,
                   'config': config}
     if config.AMP_OPT_LEVEL != "O0":
         save_state['amp'] = amp.state_dict()
-
-    save_path = os.path.join(config.OUTPUT, f'ckpt_epoch_{epoch}.pth')
+    if best:
+        save_path = os.path.join(config.OUTPUT, 'ckpt_best.pth')
+    else:
+        save_path = os.path.join(config.OUTPUT, f'ckpt_epoch_{epoch}.pth')
     logger.info(f"{save_path} saving......")
     torch.save(save_state, save_path)
     logger.info(f"{save_path} saved !!!")

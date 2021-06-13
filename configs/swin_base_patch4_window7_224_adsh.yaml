@@ -9,9 +9,13 @@ MODEL:
     WINDOW_SIZE: 7
 TRAIN:
   BASE_LR: 5e-4
+  SAMPLE_ITER: 10
+  EPOCHS: 600
 HASH:
-  GAMMA: 20.0
-  HASH_BIT: 32
-  LAMBD: 0.1
-  LAMBD_CLS: 0.1
-  PRETRAINED: downloads/swin_base_patch4_window7_224_22k.pth
+  LAMBD_CLS: 0.0
+  HASH_BIT: 64
+  GAMMA: 200.0
+  NUM_SAMPLES: 2000
+  PRETRAINED: ./downloads/swin_base_patch4_window7_224_22k.pth
+DATA:
+  DATASET: CUB_200_2011_ADSH

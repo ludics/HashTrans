@@ -1,6 +1,6 @@
 MODEL:
-  TYPE: swin
-  NAME: swin_base_patch4_window7_224
+  TYPE: resnet
+  NAME: tv_resnet50
   DROP_PATH_RATE: 0.5
   SWIN:
     EMBED_DIM: 128
@@ -10,8 +10,9 @@ MODEL:
 TRAIN:
   BASE_LR: 5e-4
 HASH:
+  HASH_BIT: 64
   GAMMA: 20.0
-  HASH_BIT: 32
   LAMBD: 0.1
   LAMBD_CLS: 0.1
-  PRETRAINED: downloads/swin_base_patch4_window7_224_22k.pth
+DATA:
+  DATASET: Dogs
