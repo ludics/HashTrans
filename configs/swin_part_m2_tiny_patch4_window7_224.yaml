@@ -19,4 +19,3 @@ HASH:
   LAMBD_CH: 0.1
   SP_T: 1.0
   PRETRAINED: downloads/swin_tiny_patch4_window7_224.pth
-  HASH_LAYER: mlp

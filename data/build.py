@@ -28,7 +28,8 @@ def build_loader(config):
     print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build train dataset")
     dataset_val, _ = build_dataset(is_train=False, config=config)
     print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build val dataset")
-
+    dataset_gallery, _ = build_dataset(is_train=True, config=config, do_trans=False)
+    dataset_gallery = dataset_train
     num_tasks = dist.get_world_size()
     global_rank = dist.get_rank()
     if config.DATA.ZIP_MODE and config.DATA.CACHE_MODE == 'part':
@@ -42,7 +43,7 @@ def build_loader(config):
     indices = np.arange(dist.get_rank(), len(dataset_val), dist.get_world_size())
     # sampler_val = SubsetRandomSampler(indices)
     sampler_val = SequentialSampler(dataset_val)
-    sampler_gallery = SequentialSampler(dataset_train)
+    sampler_gallery = SequentialSampler(dataset_gallery)
     
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -53,7 +54,7 @@ def build_loader(config):
     )
 
     data_loader_gallery = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_gallery,
+        dataset_gallery, sampler=sampler_gallery,
         batch_size=config.DATA.BATCH_SIZE,
         num_workers=config.DATA.NUM_WORKERS,
         pin_memory=config.DATA.PIN_MEMORY,
@@ -80,8 +81,10 @@ def build_loader(config):
     return dataset_train, dataset_val, data_loader_train, data_loader_val, data_loader_gallery, mixup_fn
 
 
-def build_dataset(is_train, config):
-    transform = build_transform(is_train, config)
+def build_dataset(is_train, config, do_trans=None):
+    if do_trans == None:
+        do_trans = is_train
+    transform = build_transform(do_trans, config)
     if config.DATA.DATASET == 'imagenet':
         prefix = 'train' if is_train else 'val'
         if config.DATA.ZIP_MODE:

@@ -49,8 +49,9 @@ def config_dataset(config):
 draw_range = [1, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 8500,
               9000, 9500, 10000]
 
-def pr_curve(rF, qF, rL, qL, draw_range=draw_range):
-    #  https://blog.csdn.net/HackerTom/article/details/89425729
+draw_range = np.arange(1, 501)
+
+def pr_curve(rF, qF, rL, qL):
     n_query = qF.shape[0]
     Gnd = (np.dot(qL, rL.transpose()) > 0).astype(np.float32)
     Rank = np.argsort(CalcHammingDist(qF, rF))
@@ -70,7 +71,7 @@ def pr_curve(rF, qF, rL, qL, draw_range=draw_range):
             r[it] = gnd_r / gnd_all
         P.append(np.mean(p))
         R.append(np.mean(r))
-    return P, R
+    return np.array(P), np.array(R)
 
 
 class ImageList(object):

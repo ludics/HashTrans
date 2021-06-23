@@ -28,7 +28,7 @@ from utils.optimizer import build_optimizer
 from utils.logger import create_logger
 from utils.utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_resume_helper, reduce_tensor
 from utils.feat_extractor import feat_extractor, code_generator
-from utils.tools import CalcTopMap
+from utils.tools import CalcTopMap, pr_curve
 from utils.ret_metric import RetMetric
 from models.exchnet_loss import SP_Loss, CH_Loss
 from utils.evaluate import mean_average_precision
@@ -143,11 +143,16 @@ def main(args, config):
 
     if config.MODEL.RESUME:
         # max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
+        if config.EVAL_MODE:
+            ckpt = torch.load(config.MODEL.RESUME, map_location='cpu')
+            msg = model_without_ddp.load_state_dict(ckpt['model'], strict=False)
+            mAP = validate_only(config, model, data_loader_val, data_loader_gallery)
+            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
+            return
         if dist.get_rank() == args.valid_rank:
             mAP = validate(config, model, data_loader_val, data_loader_gallery)
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
-        if config.EVAL_MODE:
-            return
+
 
     if config.THROUGHPUT_MODE:
         throughput(data_loader_val, model, logger)
@@ -326,6 +331,36 @@ def validate(config, model, test_loader, database_loader):
     #    v = r_k_func.recall_k(k)
     #    logger.info(f'{k}: {v:.6f}')
     return mAP
+
+
+def validate_only(config, model, test_loader, database_loader):
+    global best_mapr
+    global best_iter
+    crt = torch.nn.CrossEntropyLoss()
+    model.eval()
+    
+    batch_time = AverageMeter()
+    loss_meter = AverageMeter()
+    acc1_meter = AverageMeter()
+    acc5_meter = AverageMeter()
+
+    end = time.time()
+    test_codes, test_labels = code_generator(model, test_loader, logger)
+    test_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[test_labels].cuda(non_blocking=True)
+    gallery_codes, gallery_labels = code_generator(model, database_loader, logger)
+    gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[gallery_labels].cuda(non_blocking=True)
+    # mAP = CalcTopMap(gallery_codes, test_codes, gallery_labels_onehot.numpy(),
+    #                  test_labels_onehot.numpy(), 10000)
+    mAP = mean_average_precision(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
+    if mAP > best_mapr:
+        best_mapr = mAP
+    logger.info(f' mAP {mAP:.6f} best_mAP {best_mapr:.6f}')
+    rF, qF, rL, qL = gallery_codes.to('cpu'), test_codes.to('cpu'), gallery_labels_onehot.to('cpu'), test_labels_onehot.to('cpu')
+    P, R = pr_curve(rF.numpy(), qF.numpy(), rL.numpy(), qL.numpy())
+    np.save(os.path.join(config.OUTPUT, f'{config.DATA.DATASET}-{config.HASH.HASH_BIT}-P.npy'), P)
+    np.save(os.path.join(config.OUTPUT, f'{config.DATA.DATASET}-{config.HASH.HASH_BIT}-R.npy'), R)
+    return mAP
+
 
 
 @torch.no_grad()
