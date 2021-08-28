@@ -123,6 +123,7 @@ def build_dataset(is_train, config, do_trans=None):
                             osp.join(data_dir,'cars_test'),
                             osp.join(data_dir,'devkit/cars_meta.mat'),
                             cleaned=None, transform=transform)
+        nb_classes = 196
     elif config.DATA.DATASET == "Food101":
         pass
     else:
