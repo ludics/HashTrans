@@ -6,6 +6,7 @@
 # --------------------------------------------------------
 
 import os
+import os.path as osp
 import torch
 import numpy as np
 import torch.distributed as dist
@@ -17,7 +18,7 @@ from timm.data.transforms import _pil_interp
 
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
-from .dataset import CUB, Cub2011, Dogs
+from .dataset import CUB, Cub2011, Dogs, CarsDataset
 from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler, Dataset
 from PIL import Image
 
@@ -84,6 +85,7 @@ def build_loader(config):
 def build_dataset(is_train, config, do_trans=None):
     if do_trans == None:
         do_trans = is_train
+    # TODO: should gallery do transform???
     transform = build_transform(do_trans, config)
     if config.DATA.DATASET == 'imagenet':
         prefix = 'train' if is_train else 'val'
@@ -109,6 +111,20 @@ def build_dataset(is_train, config, do_trans=None):
     elif config.DATA.DATASET == 'Dogs':
         dataset = Dogs(config.DATA.DATA_PATH, train=is_train, transform=transform)
         nb_classes = 120
+    elif config.DATA.DATASET == "Cars":
+        data_dir = config.DATA.DATA_PATH
+        if is_train:
+            dataset = CarsDataset(osp.join(data_dir,'devkit/cars_train_annos.mat'),
+                            osp.join(data_dir,'cars_train'),
+                            osp.join(data_dir,'devkit/cars_meta.mat'),
+                            cleaned=None, transform=transform)
+        else:
+            dataset = CarsDataset(osp.join(data_dir,'devkit/cars_test_annos_withlabels.mat'),
+                            osp.join(data_dir,'cars_test'),
+                            osp.join(data_dir,'devkit/cars_meta.mat'),
+                            cleaned=None, transform=transform)
+    elif config.DATA.DATASET == "Food101":
+        pass
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 
