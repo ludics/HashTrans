@@ -18,7 +18,7 @@ from timm.data.transforms import _pil_interp
 
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
-from .dataset import CUB, Cub2011, Dogs, CarsDataset
+from .dataset import CUB, Cub2011, Dogs, CarsDataset, Food101
 from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler, Dataset
 from PIL import Image
 
@@ -125,7 +125,8 @@ def build_dataset(is_train, config, do_trans=None):
                             cleaned=None, transform=transform)
         nb_classes = 196
     elif config.DATA.DATASET == "Food101":
-        pass
+        dataset = Food101(config.DATA.DATA_PATH, is_train, transform)
+        nb_classes = 101
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 

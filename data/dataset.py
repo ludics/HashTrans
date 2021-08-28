@@ -284,6 +284,45 @@ class CarsDataset(Dataset):
             ax.set_title(title_str.__str__(), {'fontsize': 5})
             plt.tight_layout()
 
+class Food101(Dataset):
+
+    def __init__(self, data_dir, is_train=True, transform=None):
+        """
+        Args:
+            mat_anno (string): Path to the MATLAB annotation file.
+            data_dir (string): Directory with all the images.
+            transform (callable, optional): Optional transform to be applied
+                on a sample.
+        """
+        self.img_dir = os.path.join(data_dir, "images")
+        self.meta_dir = os.path.join(data_dir, "meta")
+        self.classes_dir = os.path.join(self.meta_dir, "classes.txt")
+        with open(self.classes_dir, "r") as f:
+            classes_names = [name.strip() for name in f.readlines()]
+        self.class2id = {}
+        for idx, name in enumerate(classes_names):
+            self.class2id[name] = idx
+        if is_train:
+            with open(os.path.join(self.meta_dir, "train.txt"), "r") as f:
+                self.img_names = [name.strip() for name in f.readlines()]
+        else:
+            with open(os.path.join(self.meta_dir, "test.txt"), "r") as f:
+                self.img_names = [name.strip() for name in f.readlines()]
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.img_names)
+
+    def __getitem__(self, idx):
+        img_name = os.path.join(self.img_dir, self.img_names[idx] + ".jpg")
+        image = Image.open(img_name).convert('RGB')
+        food_class = img_name.split("/")[-2]
+        class_id = self.class2id[food_class]
+        assert class_id < 101
+        if self.transform:
+            image = self.transform(image)
+        return image, class_id
+
 def make_dataset(dir, image_ids, targets):
     assert(len(image_ids) == len(targets))
     images = []
