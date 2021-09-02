@@ -98,6 +98,8 @@ _C.TRAIN.USE_CHECKPOINT = False
 
 _C.TRAIN.SAMPLE_ITER = 10
 
+_C.TRAIN.EVAL_STEPS = 1
+
 # LR scheduler
 _C.TRAIN.LR_SCHEDULER = CN()
 _C.TRAIN.LR_SCHEDULER.NAME = 'cosine'
@@ -115,6 +117,9 @@ _C.TRAIN.OPTIMIZER.EPS = 1e-8
 _C.TRAIN.OPTIMIZER.BETAS = (0.9, 0.999)
 # SGD momentum
 _C.TRAIN.OPTIMIZER.MOMENTUM = 0.9
+
+
+
 
 # -----------------------------------------------------------------------------
 # Augmentation settings

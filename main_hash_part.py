@@ -164,16 +164,17 @@ def main(args, config):
         data_loader_train.sampler.set_epoch(epoch)
 
         train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
-        if dist.get_rank() == args.valid_rank:
-            mAP = validate(config, model, data_loader_val, data_loader_gallery)
-            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
-            if mAP > max_accuracy:
-                save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
-            max_accuracy = max(max_accuracy, mAP)
-            # if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            if (epoch == (config.TRAIN.EPOCHS - 1)):
-                save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
-            logger.info(f'Max accuracy: {max_accuracy:.6f}')
+        if epoch % config.TRAIN.EVAL_STEPS == 0:
+            if dist.get_rank() == args.valid_rank:
+                mAP = validate(config, model, data_loader_val, data_loader_gallery)
+                logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
+                if mAP > max_accuracy:
+                    save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
+                max_accuracy = max(max_accuracy, mAP)
+                # if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+                if (epoch == (config.TRAIN.EPOCHS - 1)):
+                    save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
+                logger.info(f'Max accuracy: {max_accuracy:.6f}')
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
