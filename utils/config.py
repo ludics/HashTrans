@@ -188,6 +188,7 @@ _C.PRINT_FREQ = 10
 _C.SEED = 0
 # Perform evaluation only, overwritten by command line argument
 _C.EVAL_MODE = False
+_C.EVAL_CONT_MODE = False
 # Test throughput only, overwritten by command line argument
 _C.THROUGHPUT_MODE = False
 # local rank for DistributedDataParallel, given by command line argument
@@ -247,6 +248,8 @@ def update_config(config, args):
         config.DATA.DATASET = args.dataset
     if args.make_cam:
         config.MAKE_CAM = True
+    if args.eval_cont:
+        config.EVAL_CONT_MODE = True
     config.MODEL.ATT_SIZE = args.att_size
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank

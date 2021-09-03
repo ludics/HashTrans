@@ -87,7 +87,7 @@ def mean_average_precision_cont(query_feat,
         # Calculate hamming distance
         # hamming_dist = 0.5 * (database_code.shape[1] - query_code[i, :] @ database_code.t())
 
-        cos_dist = query_feat[i, :] @ database_feat.t() / query_norm[i] / database_norm
+        cos_dist = 1 - query_feat[i, :] @ database_feat.t() / query_norm[i] / database_norm
 
         # Arrange position according to hamming distance
         retrieval = retrieval[torch.argsort(cos_dist)][:topk]

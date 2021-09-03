@@ -5,10 +5,12 @@ import torch.nn.functional as F
 def feat_extractor(model, data_loader, logger=None):
     model.eval()
     feats = list()
+    labels = list()
     if logger is not None:
         logger.info("Begin extract")
     for i, batch in enumerate(data_loader):
         imgs = batch[0].cuda()
+        labels.append(batch[1])
 
         with torch.no_grad():
             out, _ = model(imgs)
@@ -20,10 +22,11 @@ def feat_extractor(model, data_loader, logger=None):
             logger.debug(f"Extract Features: [{i + 1}/{len(data_loader)}]")
         del out
     feats = np.vstack(feats)
+    labels = torch.cat(labels)
     return feats
 
 
-def code_generator(model, data_loader, logger=None):
+def code_generator(model, data_loader, logger=None, cont=False):
     model.eval()
     codes = list()
     labels = list()
@@ -40,6 +43,9 @@ def code_generator(model, data_loader, logger=None):
         if logger is not None and (i + 1) % 100 == 0:
             logger.debug(f"Extract Features: [{i + 1}/{len(data_loader)}]")
         del out
-    codes = torch.cat(codes).sign()
+    if cont:
+        codes = torch.cat(codes)
+    else:
+        codes = torch.cat(codes).sign()
     labels = torch.cat(labels)
     return codes, labels

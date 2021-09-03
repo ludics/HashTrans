@@ -31,7 +31,7 @@ from utils.feat_extractor import feat_extractor, code_generator
 from utils.tools import CalcTopMap, pr_curve
 from utils.ret_metric import RetMetric
 from models.exchnet_loss import SP_Loss, CH_Loss
-from utils.evaluate import mean_average_precision
+from utils.evaluate import mean_average_precision, mean_average_precision_cont
 
 try:
     # noinspection PyUnresolvedReferences
@@ -81,6 +81,8 @@ def parse_option():
     # distributed training
     parser.add_argument("--local_rank", type=int, required=True, help='local rank for DistributedDataParallel')
     parser.add_argument("--valid_rank", type=int, default=0, help='rank for validation gpu')
+    parser.add_argument('--make_cam', action='store_true', help='config to make cam')
+    parser.add_argument('--eval_cont', action='store_true', help='config to make cam')
 
     args, unparsed = parser.parse_known_args()
 
@@ -150,7 +152,7 @@ def main(args, config):
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
             return
         if config.EVAL_CONT_MODE:
-            ckpt = torch.load(config.MODEL.RESUME, map_location='cpi')
+            ckpt = torch.load(config.MODEL.RESUME, map_location='cpu')
             msg = model_without_ddp.load_state_dict(ckpt['model'], strict=False)
             mAP = validate_cont(config, model, data_loader_val, data_loader_gallery)
             logger.info(f"cont mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
@@ -352,13 +354,13 @@ def validate_cont(config, model, test_loader, database_loader):
     acc5_meter = AverageMeter()
 
     end = time.time()
-    test_codes, test_labels = code_generator(model, test_loader, logger)
+    test_codes, test_labels = code_generator(model, test_loader, logger, cont=True)
     test_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[test_labels].cuda(non_blocking=True)
-    gallery_codes, gallery_labels = code_generator(model, database_loader, logger)
+    gallery_codes, gallery_labels = code_generator(model, database_loader, logger, cont=True)
     gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[gallery_labels].cuda(non_blocking=True)
     # mAP = CalcTopMap(gallery_codes, test_codes, gallery_labels_onehot.numpy(),
     #                  test_labels_onehot.numpy(), 10000)
-    mAP = mean_average_precision(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
+    mAP = mean_average_precision_cont(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
     # pr_range = [10, 20, 40, 80]
     # codes = [gallery_codes, test_codes]
     # labels = [gallery_labels.numpy(), test_labels.numpy()]

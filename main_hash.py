@@ -81,6 +81,7 @@ def parse_option():
     # distributed training
     parser.add_argument("--local_rank", type=int, required=True, help='local rank for DistributedDataParallel')
     parser.add_argument("--valid_rank", type=int, default=0, help='rank for validation gpu')
+    parser.add_argument('--make_cam', action='store_true', help='config to make cam')
 
     args, unparsed = parser.parse_known_args()
 
