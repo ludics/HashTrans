@@ -55,25 +55,27 @@ class CUB():
         train_file_list = [x for i, x in zip(train_test_list, img_name_list) if i]
         test_file_list = [x for i, x in zip(train_test_list, img_name_list) if not i]
         if self.is_train:
-            self.train_img = [imageio.imread(os.path.join(self.root, 'images', train_file)) for train_file in
+            self.train_img = [os.path.join(self.root, 'images', train_file) for train_file in
                               train_file_list[:data_len]]
             self.label = [x for i, x in zip(train_test_list, label_list) if i][:data_len]
             self.train_imgname = [x for x in train_file_list[:data_len]]
         if not self.is_train:
-            self.test_img = [imageio.imread(os.path.join(self.root, 'images', test_file)) for test_file in
+            self.test_img = [os.path.join(self.root, 'images', test_file) for test_file in
                              test_file_list[:data_len]]
             self.label = [x for i, x in zip(train_test_list, label_list) if not i][:data_len]
             self.test_imgname = [x for x in test_file_list[:data_len]]
     def __getitem__(self, index):
         if self.is_train:
-            img, target, imgname = self.train_img[index], self.label[index], self.train_imgname[index]
+            img_path, target, imgname = self.train_img[index], self.label[index], self.train_imgname[index]
+            img = imageio.imread(img_path)
             if len(img.shape) == 2:
                 img = np.stack([img] * 3, 2)
             img = Image.fromarray(img, mode='RGB')
             if self.transform is not None:
                 img = self.transform(img)
         else:
-            img, target, imgname = self.test_img[index], self.label[index], self.test_imgname[index]
+            img_path, target, imgname = self.test_img[index], self.label[index], self.test_imgname[index]
+            img = imageio.imread(img_path)
             if len(img.shape) == 2:
                 img = np.stack([img] * 3, 2)
             img = Image.fromarray(img, mode='RGB')

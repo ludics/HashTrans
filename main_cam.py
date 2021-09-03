@@ -28,10 +28,11 @@ from utils.optimizer import build_optimizer
 from utils.logger import create_logger
 from utils.utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_resume_helper, reduce_tensor
 from utils.feat_extractor import feat_extractor, code_generator
-from utils.tools import CalcTopMap, pr_curve
+from utils.tools import CalcTopMap
 from utils.ret_metric import RetMetric
-from models.exchnet_loss import SP_Loss, CH_Loss
 from utils.evaluate import mean_average_precision
+import cv2
+
 
 try:
     # noinspection PyUnresolvedReferences
@@ -53,7 +54,7 @@ def parse_option():
     # easy config modification
     parser.add_argument('--batch-size', type=int, help="batch size for single GPU")
     parser.add_argument('--data-path', type=str, help='path to dataset')
-    parser.add_argument('--dataset', type=str, default=None, help='path to dataset')
+    parser.add_argument('--dataset', type=str, default=None, help='dataset name')
     parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
     parser.add_argument('--cache-mode', type=str, default='part', choices=['no', 'full', 'part'],
                         help='no: no cache, '
@@ -72,7 +73,7 @@ def parse_option():
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
     
     parser.add_argument('--hash_bit', type=int, default=-1, help="Num of hashbit")
-    parser.add_argument('--att_size', type=int, default=4, help="Num of att size")
+    parser.add_argument('--att_size', type=int, default=-1, help="Num of hashbit")
     parser.add_argument('--gamma', type=float, default=20.0, help="Cauchy loss gamma")
     parser.add_argument('--lambd', type=float, default=0.1, help="Cauchy loss lambd")
     parser.add_argument('--lambd_cls', type=float, default=1.0, help="CLS loss lambd")
@@ -81,6 +82,9 @@ def parse_option():
     # distributed training
     parser.add_argument("--local_rank", type=int, required=True, help='local rank for DistributedDataParallel')
     parser.add_argument("--valid_rank", type=int, default=0, help='rank for validation gpu')
+
+    parser.add_argument('--make_cam', action='store_true', help='config to make cam')
+
 
     args, unparsed = parser.parse_known_args()
 
@@ -100,10 +104,57 @@ def main(args, config):
     optimizer = build_optimizer(config, model)
     if config.AMP_OPT_LEVEL != "O0":
         model, optimizer = amp.initialize(model, optimizer, opt_level=config.AMP_OPT_LEVEL)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False,
-                                                      find_unused_parameters=True)
-    model_without_ddp = model.module
+    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False,
+    #                                                   find_unused_parameters=True)
+    # model_without_ddp = model.module
 
+    if config.MAKE_CAM:
+        ckpt = torch.load(config.MODEL.RESUME, map_location='cpu')
+        msg = model.load_state_dict(ckpt['model'], strict=False)
+        # mAP = validate_only(config, model, data_loader_val, data_loader_gallery)
+        # target_layer = model.adfadf.dadfa()
+        # print(model)
+        # logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
+    target_layer = model.resnet.layer4[-1]
+
+    def forward_hook(module,inputs, outputs):
+        print("outputs.shape", outputs.shape)
+
+    target_layer.register_forward_hook(forward_hook)
+    from pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM
+    from pytorch_grad_cam.utils.image import show_cam_on_image
+    cam = GradCAM(model=model, target_layer=target_layer, use_cuda=True)
+    target_category = 281
+
+    
+    for idx, (samples, targets) in enumerate(data_loader_train):
+        samples = samples.cuda(non_blocking=True)
+        targets = targets.cuda(non_blocking=True)
+
+        if mixup_fn is not None:
+            samples, targets = mixup_fn(samples, targets)
+        #print("targets.shape: ", targets.shape)
+        #print("targets: ", targets)
+        labels = torch.eye(config.MODEL.NUM_CLASSES)[targets].cuda(non_blocking=True)
+        input_tensor = samples[:1, :, :, :]
+        try:
+            grayscale_cam = cam(input_tensor=input_tensor, target_category=target_category)
+
+            # In this example grayscale_cam has only one image in the batch:
+            grayscale_cam = grayscale_cam[0, :]
+
+            rgb_img = np.zeros((samples.shape[-2], samples.shape[-1], 3), dtype=np.uint8)
+
+            visualization = show_cam_on_image(rgb_img, grayscale_cam)
+            print("visualization.shape", visualization.shape)
+            print("type(visualization)", type(visualization))
+            
+        except Exception as e:
+            print(e)
+        cv2.imwrite("{}.png".format(idx), visualization)
+        # outputs, preds = model(samples)
+        return
+  
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"number of params: {n_parameters}")
     if hasattr(model_without_ddp, 'flops'):
@@ -114,20 +165,18 @@ def main(args, config):
 
     if config.AUG.MIXUP > 0.:
         # smoothing is handled with mixup label transform
-        crt_cls = SoftTargetCrossEntropy()
-        logger.info("soft target cls")
+        criterion_cls = SoftTargetCrossEntropy()
     elif config.MODEL.LABEL_SMOOTHING > 0.:
-        crt_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
-        logger.info("label smoothing cls")
+        criterion_cls = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
     else:
-        crt_cls = torch.nn.CrossEntropyLoss()
-        logger.info("cls xent")
-    crt_hash = DCHLoss(config)
-
-    crt_sp = SP_Loss(t=config.HASH.SP_T)
-    crt_ch = CH_Loss(t=config.HASH.CH_T)
+        criterion_cls = torch.nn.CrossEntropyLoss()
     
+    criterion_hash = DCHLoss(config)
+
     max_accuracy = 0.0
+
+
+
 
     if config.TRAIN.AUTO_RESUME:
         resume_file = auto_resume_helper(config.OUTPUT)
@@ -143,22 +192,12 @@ def main(args, config):
 
     if config.MODEL.RESUME:
         # max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
-        if config.EVAL_MODE:
-            ckpt = torch.load(config.MODEL.RESUME, map_location='cpu')
-            msg = model_without_ddp.load_state_dict(ckpt['model'], strict=False)
-            mAP = validate_only(config, model, data_loader_val, data_loader_gallery)
-            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
-            return
-        if config.EVAL_CONT_MODE:
-            ckpt = torch.load(config.MODEL.RESUME, map_location='cpi')
-            msg = model_without_ddp.load_state_dict(ckpt['model'], strict=False)
-            mAP = validate_cont(config, model, data_loader_val, data_loader_gallery)
-            logger.info(f"cont mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
-            return
         if dist.get_rank() == args.valid_rank:
             mAP = validate(config, model, data_loader_val, data_loader_gallery)
             logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.3f}%")
-
+        if config.EVAL_MODE:
+            return
+    
 
     if config.THROUGHPUT_MODE:
         throughput(data_loader_val, model, logger)
@@ -169,25 +208,24 @@ def main(args, config):
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
         data_loader_train.sampler.set_epoch(epoch)
 
-        train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
-        if epoch % config.TRAIN.EVAL_STEPS == 0:
-            if dist.get_rank() == args.valid_rank:
-                mAP = validate(config, model, data_loader_val, data_loader_gallery)
-                logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
-                if mAP > max_accuracy:
-                    save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
-                max_accuracy = max(max_accuracy, mAP)
-                # if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-                if (epoch == (config.TRAIN.EPOCHS - 1)):
-                    save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
-                logger.info(f'Max accuracy: {max_accuracy:.6f}')
+        train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
+        if dist.get_rank() == args.valid_rank:
+            mAP = validate(config, model, data_loader_val, data_loader_gallery)
+            logger.info(f"mAP of the network on the {len(dataset_val)} query images: {mAP:.6f}")
+            if mAP > max_accuracy:
+                save_checkpoint(config, epoch, model_without_ddp, mAP, optimizer, lr_scheduler, logger, best=True)
+            max_accuracy = max(max_accuracy, mAP)
+            # if (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+            if (epoch == (config.TRAIN.EPOCHS - 1)):
+                save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
+            logger.info(f'Max accuracy: {max_accuracy:.6f}')
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
+def train_one_epoch(config, model, criterion_hash, criterion_cls, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
     model.train()
     optimizer.zero_grad()
 
@@ -198,8 +236,6 @@ def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loade
     qloss_meter = AverageMeter()
     hash_loss_meter = AverageMeter()
     cls_loss_meter = AverageMeter()
-    sp_loss_meter = AverageMeter()
-    ch_loss_meter = AverageMeter()
     norm_meter = AverageMeter()
 
     start = time.time()
@@ -213,22 +249,17 @@ def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loade
         #print("targets.shape: ", targets.shape)
         #print("targets: ", targets)
         labels = torch.eye(config.MODEL.NUM_CLASSES)[targets].cuda(non_blocking=True)
-        outputs, preds, sp_v, ch_v = model(samples)
+        outputs, preds = model(samples)
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
-            hash_loss, c_loss, q_loss = crt_hash(outputs, labels)
-            cls_loss = crt_cls(preds, targets)
-            sp_loss = crt_sp(sp_v)
-            ch_loss = crt_sp(ch_v)
-            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss + \
-                 config.HASH.LAMBD_SP * sp_loss + config.HASH.LAMBD_CH * ch_loss
+            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
+            cls_loss = criterion_cls(preds, targets)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
             c_loss = c_loss / config.TRAIN.ACCUMULATION_STEPS
             q_loss = q_loss / config.TRAIN.ACCUMULATION_STEPS
             cls_loss = cls_loss / config.TRAIN.ACCUMULATION_STEPS
             hash_loss = hash_loss / config.TRAIN.ACCUMULATION_STEPS
-            sp_loss = sp_loss / config.TRAIN.ACCUMULATION_STEPS
-            ch_loss = ch_loss / config.TRAIN.ACCUMULATION_STEPS
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -247,12 +278,9 @@ def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loade
                 optimizer.zero_grad()
                 lr_scheduler.step_update(epoch * num_steps + idx)
         else:
-            hash_loss, c_loss, q_loss = crt_hash(outputs, labels)
-            cls_loss = crt_cls(preds, targets)
-            sp_loss = crt_sp(sp_v)
-            ch_loss = crt_sp(ch_v)
-            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss + \
-                 config.HASH.LAMBD_SP * sp_loss + config.HASH.LAMBD_CH * ch_loss
+            hash_loss, c_loss, q_loss = criterion_hash(outputs, labels)
+            cls_loss = criterion_cls(preds, targets)
+            loss = hash_loss + config.HASH.LAMBD_CLS * cls_loss
             optimizer.zero_grad()
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -277,8 +305,6 @@ def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loade
         qloss_meter.update(q_loss.item(), targets.size(0))
         hash_loss_meter.update(hash_loss.item(), targets.size(0))
         cls_loss_meter.update(cls_loss.item(), targets.size(0))
-        sp_loss_meter.update(sp_loss.item(), targets.size(0))
-        ch_loss_meter.update(ch_loss.item(), targets.size(0))
         norm_meter.update(grad_norm)
         batch_time.update(time.time() - end)
         end = time.time()
@@ -289,15 +315,13 @@ def train_one_epoch(config, model, crt_hash, crt_cls, crt_sp, crt_ch, data_loade
             etas = batch_time.avg * (num_steps - idx)
             logger.info(
                 f'Train: [{epoch}/{config.TRAIN.EPOCHS}][{idx}/{num_steps}]\t'
-                f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\n'
+                f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\t'
                 f'time {batch_time.val:.4f} ({batch_time.avg:.4f})\t'
                 f'loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
                 f'closs {closs_meter.val:.4f} ({closs_meter.avg:.4f})\t'
                 f'qloss {qloss_meter.val:.4f} ({qloss_meter.avg:.4f})\t'
-                f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\n'
+                f'hash_loss {hash_loss_meter.val:.4f} ({hash_loss_meter.avg:.4f})\t'
                 f'cls_loss {cls_loss_meter.val:.4f} ({cls_loss_meter.avg:.4f})\t'
-                f'sp_loss {sp_loss_meter.val:.4f} ({sp_loss_meter.avg:.4f})\t'
-                f'ch_loss {ch_loss_meter.val:.4f} ({ch_loss_meter.avg:.4f})\t'
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
                 f'mem {memory_used:.0f}MB')
     epoch_time = time.time() - start
@@ -309,7 +333,7 @@ best_iter = -1
 def validate(config, model, test_loader, database_loader):
     global best_mapr
     global best_iter
-    crt = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.CrossEntropyLoss()
     model.eval()
     
     batch_time = AverageMeter()
@@ -337,69 +361,6 @@ def validate(config, model, test_loader, database_loader):
     #for i, k in enumerate(pr_range):
     #    v = r_k_func.recall_k(k)
     #    logger.info(f'{k}: {v:.6f}')
-    return mAP
-
-@torch.no_grad()
-def validate_cont(config, model, test_loader, database_loader):
-    global best_mapr
-    global best_iter
-    crt = torch.nn.CrossEntropyLoss()
-    model.eval()
-    
-    batch_time = AverageMeter()
-    loss_meter = AverageMeter()
-    acc1_meter = AverageMeter()
-    acc5_meter = AverageMeter()
-
-    end = time.time()
-    test_codes, test_labels = code_generator(model, test_loader, logger)
-    test_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[test_labels].cuda(non_blocking=True)
-    gallery_codes, gallery_labels = code_generator(model, database_loader, logger)
-    gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[gallery_labels].cuda(non_blocking=True)
-    # mAP = CalcTopMap(gallery_codes, test_codes, gallery_labels_onehot.numpy(),
-    #                  test_labels_onehot.numpy(), 10000)
-    mAP = mean_average_precision(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
-    # pr_range = [10, 20, 40, 80]
-    # codes = [gallery_codes, test_codes]
-    # labels = [gallery_labels.numpy(), test_labels.numpy()]
-    if mAP > best_mapr:
-        best_mapr = mAP
-    logger.info(f' mAP {mAP:.6f} best_mAP {best_mapr:.6f}')
-    #r_k_func = RetMetric(codes, labels, hamming_dis=True)
-    #r_k_list = []
-    #logger.info(f'Recall@K\t')
-    #for i, k in enumerate(pr_range):
-    #    v = r_k_func.recall_k(k)
-    #    logger.info(f'{k}: {v:.6f}')
-    return mAP
-
-
-def validate_only(config, model, test_loader, database_loader):
-    global best_mapr
-    global best_iter
-    crt = torch.nn.CrossEntropyLoss()
-    model.eval()
-    
-    batch_time = AverageMeter()
-    loss_meter = AverageMeter()
-    acc1_meter = AverageMeter()
-    acc5_meter = AverageMeter()
-
-    end = time.time()
-    test_codes, test_labels = code_generator(model, test_loader, logger)
-    test_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[test_labels].cuda(non_blocking=True)
-    gallery_codes, gallery_labels = code_generator(model, database_loader, logger)
-    gallery_labels_onehot = torch.eye(config.MODEL.NUM_CLASSES)[gallery_labels].cuda(non_blocking=True)
-    # mAP = CalcTopMap(gallery_codes, test_codes, gallery_labels_onehot.numpy(),
-    #                  test_labels_onehot.numpy(), 10000)
-    mAP = mean_average_precision(test_codes, gallery_codes, test_labels_onehot, gallery_labels_onehot, -1)
-    if mAP > best_mapr:
-        best_mapr = mAP
-    logger.info(f' mAP {mAP:.6f} best_mAP {best_mapr:.6f}')
-    rF, qF, rL, qL = gallery_codes.to('cpu'), test_codes.to('cpu'), gallery_labels_onehot.to('cpu'), test_labels_onehot.to('cpu')
-    P, R = pr_curve(rF.numpy(), qF.numpy(), rL.numpy(), qL.numpy())
-    np.save(os.path.join(config.OUTPUT, f'{config.DATA.DATASET}-{config.HASH.HASH_BIT}-P.npy'), P)
-    np.save(os.path.join(config.OUTPUT, f'{config.DATA.DATASET}-{config.HASH.HASH_BIT}-R.npy'), R)
     return mAP
 
 

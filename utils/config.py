@@ -192,7 +192,7 @@ _C.EVAL_MODE = False
 _C.THROUGHPUT_MODE = False
 # local rank for DistributedDataParallel, given by command line argument
 _C.LOCAL_RANK = 0
-
+_C.MAKE_CAM = False
 
 def _update_config_from_file(config, cfg_file):
     config.defrost()
@@ -245,6 +245,8 @@ def update_config(config, args):
         config.HASH.HASH_BIT = args.hash_bit
     if args.dataset:
         config.DATA.DATASET = args.dataset
+    if args.make_cam:
+        config.MAKE_CAM = True
     config.MODEL.ATT_SIZE = args.att_size
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
