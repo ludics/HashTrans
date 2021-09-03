@@ -6,6 +6,7 @@
 # --------------------------------------------------------
 
 import os
+import os.path as osp
 import torch
 import numpy as np
 import torch.distributed as dist
@@ -17,7 +18,7 @@ from timm.data.transforms import _pil_interp
 
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
-from .dataset import CUB, Cub2011, Dogs
+from .dataset import CUB, Cub2011, Dogs, CarsDataset, Food101
 from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler, Dataset
 from PIL import Image
 
@@ -28,7 +29,8 @@ def build_loader(config):
     print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build train dataset")
     dataset_val, _ = build_dataset(is_train=False, config=config)
     print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build val dataset")
-
+    dataset_gallery, _ = build_dataset(is_train=True, config=config, do_trans=False)
+    dataset_gallery = dataset_train
     num_tasks = dist.get_world_size()
     global_rank = dist.get_rank()
     if config.DATA.ZIP_MODE and config.DATA.CACHE_MODE == 'part':
@@ -42,7 +44,7 @@ def build_loader(config):
     indices = np.arange(dist.get_rank(), len(dataset_val), dist.get_world_size())
     # sampler_val = SubsetRandomSampler(indices)
     sampler_val = SequentialSampler(dataset_val)
-    sampler_gallery = SequentialSampler(dataset_train)
+    sampler_gallery = SequentialSampler(dataset_gallery)
     
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -53,7 +55,7 @@ def build_loader(config):
     )
 
     data_loader_gallery = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_gallery,
+        dataset_gallery, sampler=sampler_gallery,
         batch_size=config.DATA.BATCH_SIZE,
         num_workers=config.DATA.NUM_WORKERS,
         pin_memory=config.DATA.PIN_MEMORY,
@@ -80,8 +82,11 @@ def build_loader(config):
     return dataset_train, dataset_val, data_loader_train, data_loader_val, data_loader_gallery, mixup_fn
 
 
-def build_dataset(is_train, config):
-    transform = build_transform(is_train, config)
+def build_dataset(is_train, config, do_trans=None):
+    if do_trans == None:
+        do_trans = is_train
+    # TODO: should gallery do transform???
+    transform = build_transform(do_trans, config)
     if config.DATA.DATASET == 'imagenet':
         prefix = 'train' if is_train else 'val'
         if config.DATA.ZIP_MODE:
@@ -106,6 +111,22 @@ def build_dataset(is_train, config):
     elif config.DATA.DATASET == 'Dogs':
         dataset = Dogs(config.DATA.DATA_PATH, train=is_train, transform=transform)
         nb_classes = 120
+    elif config.DATA.DATASET == "Cars":
+        data_dir = config.DATA.DATA_PATH
+        if is_train:
+            dataset = CarsDataset(osp.join(data_dir,'devkit/cars_train_annos.mat'),
+                            osp.join(data_dir,'cars_train'),
+                            osp.join(data_dir,'devkit/cars_meta.mat'),
+                            cleaned=None, transform=transform)
+        else:
+            dataset = CarsDataset(osp.join(data_dir,'devkit/cars_test_annos_withlabels.mat'),
+                            osp.join(data_dir,'cars_test'),
+                            osp.join(data_dir,'devkit/cars_meta.mat'),
+                            cleaned=None, transform=transform)
+        nb_classes = 196
+    elif config.DATA.DATASET == "Food101":
+        dataset = Food101(config.DATA.DATA_PATH, is_train, transform)
+        nb_classes = 101
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 
